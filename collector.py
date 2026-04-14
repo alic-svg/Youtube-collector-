@@ -1,0 +1,369 @@
+"""
+YouTube 영상 수집 핵심 로직
+- 키워드 검색 기반 수집
+- 채널 URL 기반 수집
+- 숏폼 판별 (60초 이하 OR #shorts 태그)
+"""
+
+import re
+import time
+import requests
+from datetime import datetime, timedelta
+from urllib.parse import urlparse, unquote
+
+BASE_URL = "https://www.googleapis.com/youtube/v3"
+
+
+# ─────────────────────────────────────────
+# API 공통
+# ─────────────────────────────────────────
+def api_get(endpoint, params, api_key):
+    params["key"] = api_key
+    try:
+        r = requests.get(f"{BASE_URL}/{endpoint}", params=params, timeout=15)
+        d = r.json()
+        if "error" in d:
+            return None, d["error"].get("message", "알 수 없는 오류")
+        return d, None
+    except Exception as e:
+        return None, str(e)
+
+
+def validate_api_key(api_key):
+    d, err = api_get("videos", {"part": "snippet", "id": "dQw4w9WgXcQ"}, api_key)
+    if d is None:
+        return False, err
+    return True, "유효한 API 키입니다."
+
+
+# ─────────────────────────────────────────
+# 유틸
+# ─────────────────────────────────────────
+def parse_duration(iso):
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso or "")
+    if not m:
+        return 0
+    return int(m.group(1) or 0) * 3600 + int(m.group(2) or 0) * 60 + int(m.group(3) or 0)
+
+
+def is_short(duration_sec, title, tags):
+    """숏폼 탭 업로드 기준: 60초 이하 OR #shorts 태그"""
+    if duration_sec <= 60:
+        return True
+    combined = (title + " " + " ".join(tags or [])).lower()
+    if "#shorts" in combined or re.search(r"#short\b", combined):
+        return True
+    return False
+
+
+def parse_channel_urls(urls):
+    """URL 목록에서 @핸들 추출"""
+    handles = []
+    for url in urls:
+        url = url.strip()
+        if not url:
+            continue
+        parsed = urlparse(url)
+        path = unquote(parsed.path)
+        if "/@" in path:
+            m = re.search(r"/@([^/\s?]+)", path)
+            if m:
+                handles.append(m.group(1))
+    return handles
+
+
+def build_thumbnail_formula(video_id):
+    return f'=IFERROR(IMAGE("https://i.ytimg.com/vi/{video_id}/mqdefault.jpg","",0),"")'
+
+
+# ─────────────────────────────────────────
+# YouTube API 요청
+# ─────────────────────────────────────────
+def search_videos(keyword, pub_after, api_key, max_results=50,
+                  region_code="KR", lang_code="ko"):
+    ids, page_token = [], None
+    while len(ids) < max_results:
+        params = {
+            "part": "id", "q": keyword, "type": "video",
+            "maxResults": min(50, max_results - len(ids)),
+            "order": "viewCount",
+            "publishedAfter": pub_after,
+        }
+        if region_code:
+            params["regionCode"] = region_code
+        if lang_code:
+            params["relevanceLanguage"] = lang_code
+        if page_token:
+            params["pageToken"] = page_token
+
+        d, _ = api_get("search", params, api_key)
+        if not d:
+            break
+        for item in d.get("items", []):
+            v = item["id"].get("videoId")
+            if v:
+                ids.append(v)
+        page_token = d.get("nextPageToken")
+        if not page_token:
+            break
+        time.sleep(0.3)
+    return ids
+
+
+def get_video_details(video_ids, api_key, callback=None):
+    results = {}
+    total = len(video_ids)
+    for i in range(0, total, 50):
+        batch = video_ids[i: i + 50]
+        d, _ = api_get(
+            "videos",
+            {"part": "snippet,statistics,contentDetails", "id": ",".join(batch)},
+            api_key,
+        )
+        if d:
+            for item in d.get("items", []):
+                vid = item["id"]
+                stats = item.get("statistics", {})
+                snip = item["snippet"]
+                results[vid] = {
+                    "title":        snip["title"],
+                    "tags":         snip.get("tags", []),
+                    "channel_name": snip["channelTitle"],
+                    "channel_id":   snip["channelId"],
+                    "views":        int(stats.get("viewCount", 0)),
+                    "upload_date":  snip["publishedAt"][:10],
+                    "duration_sec": parse_duration(
+                        item.get("contentDetails", {}).get("duration", "")
+                    ),
+                }
+        if callback:
+            callback(min(i + 50, total), total)
+        time.sleep(0.2)
+    return results
+
+
+def get_channel_stats(channel_ids, api_key):
+    results = {}
+    ids = list(channel_ids)
+    for i in range(0, len(ids), 50):
+        batch = ids[i: i + 50]
+        d, _ = api_get("channels", {"part": "statistics", "id": ",".join(batch)}, api_key)
+        if d:
+            for item in d.get("items", []):
+                cid = item["id"]
+                stats = item.get("statistics", {})
+                vc = int(stats.get("videoCount", 1)) or 1
+                results[cid] = {
+                    "subscribers": int(stats.get("subscriberCount", 0)),
+                    "avg_views":   round(int(stats.get("viewCount", 0)) / vc),
+                }
+        time.sleep(0.2)
+    return results
+
+
+def get_channel_info(handle, api_key):
+    d, err = api_get(
+        "channels",
+        {"part": "id,snippet,statistics,contentDetails", "forHandle": handle},
+        api_key,
+    )
+    if not d or not d.get("items"):
+        return None, err
+    item = d["items"][0]
+    stats = item.get("statistics", {})
+    vc = int(stats.get("videoCount", 1)) or 1
+    return {
+        "channel_id":   item["id"],
+        "channel_name": item["snippet"]["title"],
+        "uploads_pl":   item["contentDetails"]["relatedPlaylists"]["uploads"],
+        "subscribers":  int(stats.get("subscriberCount", 0)),
+        "avg_views":    round(int(stats.get("viewCount", 0)) / vc),
+    }, None
+
+
+def get_all_video_ids(uploads_pl, api_key):
+    ids, page_token = [], None
+    while True:
+        params = {"part": "contentDetails", "playlistId": uploads_pl, "maxResults": 50}
+        if page_token:
+            params["pageToken"] = page_token
+        d, _ = api_get("playlistItems", params, api_key)
+        if not d:
+            break
+        for item in d.get("items", []):
+            vid = item["contentDetails"].get("videoId")
+            if vid:
+                ids.append(vid)
+        page_token = d.get("nextPageToken")
+        if not page_token:
+            break
+        time.sleep(0.2)
+    return ids
+
+
+# ─────────────────────────────────────────
+# 수집 메인 함수
+# ─────────────────────────────────────────
+def collect_by_keywords(keywords, min_views, days, api_key,
+                        max_per_keyword=50, region_code="KR", lang_code="ko",
+                        callback=None):
+    """
+    callback(progress: float 0~1, step: str, message: str)
+    """
+    pub_after = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+    total_kw = len(keywords)
+
+    # 1. 키워드 검색
+    all_ids, keyword_map = set(), {}
+    for i, kw in enumerate(keywords):
+        if callback:
+            callback(i / total_kw * 0.33, "1/3 키워드 검색", f"'{kw}' 검색 중... ({i+1}/{total_kw})")
+        ids = search_videos(kw, pub_after, api_key, max_per_keyword, region_code, lang_code)
+        for v in ids:
+            keyword_map.setdefault(v, kw)
+            all_ids.add(v)
+        time.sleep(0.4)
+
+    if callback:
+        callback(0.33, "1/3 키워드 검색", f"완료 · {len(all_ids)}개 영상 ID 수집")
+
+    # 2. 상세 정보
+    id_list = list(all_ids)
+    total_ids = len(id_list)
+
+    def detail_cb(done, total):
+        if callback:
+            callback(0.33 + done / total * 0.33, "2/3 영상 정보 수집",
+                     f"영상 정보 수집 중... ({done}/{total})")
+
+    details = get_video_details(id_list, api_key, callback=detail_cb)
+    if callback:
+        callback(0.66, "2/3 영상 정보 수집", f"완료 · {len(details)}개")
+
+    # 3. 필터링 + 채널 통계
+    if callback:
+        callback(0.75, "3/3 필터링 및 채널 통계", "숏폼 제외 및 조회수 필터 적용 중...")
+
+    passed = [
+        {"video_id": vid, **d}
+        for vid, d in details.items()
+        if not is_short(d["duration_sec"], d["title"], d["tags"]) and d["views"] >= min_views
+    ]
+    channel_ids = {d["channel_id"] for d in passed}
+    ch_stats = get_channel_stats(channel_ids, api_key)
+
+    passed.sort(key=lambda x: x["views"], reverse=True)
+
+    results = []
+    for d in passed:
+        cid = d["channel_id"]
+        ch = ch_stats.get(cid, {"subscribers": 0, "avg_views": 0})
+        vid = d["video_id"]
+        results.append({
+            "채널명":        d["channel_name"],
+            "구독자수":      ch["subscribers"],
+            "채널평균조회수": ch["avg_views"],
+            "썸네일":        build_thumbnail_formula(vid),
+            "제목":          d["title"],
+            "조회수":        d["views"],
+            "업로드일자":    d["upload_date"],
+            "URL":           f"https://www.youtube.com/watch?v={vid}",
+        })
+
+    if callback:
+        callback(1.0, "완료", f"{len(results)}개 영상 수집 완료")
+    return results
+
+
+def collect_by_channels(channel_urls, min_views, api_key, callback=None):
+    """
+    callback(progress: float 0~1, step: str, message: str)
+    """
+    handles = parse_channel_urls(channel_urls)
+    if not handles:
+        return []
+
+    total_ch = len(handles)
+
+    # 1. 채널 정보
+    channels = {}
+    errors = []
+    for i, handle in enumerate(handles):
+        if callback:
+            callback(i / total_ch * 0.2, "1/4 채널 정보 수집",
+                     f"@{handle} 정보 수집 중... ({i+1}/{total_ch})")
+        info, err = get_channel_info(handle, api_key)
+        if info:
+            channels[info["channel_id"]] = info
+        else:
+            errors.append(f"@{handle}: {err}")
+        time.sleep(0.3)
+
+    if callback:
+        callback(0.2, "1/4 채널 정보 수집", f"완료 · {len(channels)}개 채널 (실패 {len(errors)}개)")
+
+    # 2. 영상 ID 수집
+    channel_video_map = {}
+    for i, (cid, info) in enumerate(channels.items()):
+        if callback:
+            callback(0.2 + i / total_ch * 0.2, "2/4 영상 ID 수집",
+                     f"{info['channel_name']} 영상 목록 수집 중...")
+        ids = get_all_video_ids(info["uploads_pl"], api_key)
+        channel_video_map[cid] = ids
+        time.sleep(0.3)
+
+    all_video_ids = list({v for ids in channel_video_map.values() for v in ids})
+    if callback:
+        callback(0.4, "2/4 영상 ID 수집", f"완료 · 총 {len(all_video_ids)}개 영상")
+
+    # 3. 상세 정보
+    def detail_cb(done, total):
+        if callback:
+            callback(0.4 + done / total * 0.35, "3/4 영상 정보 수집",
+                     f"영상 정보 수집 중... ({done}/{total})")
+
+    details = get_video_details(all_video_ids, api_key, callback=detail_cb)
+    if callback:
+        callback(0.75, "3/4 영상 정보 수집", f"완료 · {len(details)}개")
+
+    # 4. 필터링
+    if callback:
+        callback(0.85, "4/4 필터링 및 정렬", "숏폼 제외 및 조회수 필터 적용 중...")
+
+    passed = []
+    for cid, info in channels.items():
+        for vid in channel_video_map.get(cid, []):
+            d = details.get(vid)
+            if not d:
+                continue
+            if is_short(d["duration_sec"], d["title"], d["tags"]):
+                continue
+            if d["views"] < min_views:
+                continue
+            passed.append({
+                "video_id":     vid,
+                "channel_name": info["channel_name"],
+                "subscribers":  info["subscribers"],
+                "avg_views":    info["avg_views"],
+                **d,
+            })
+
+    passed.sort(key=lambda x: x["views"], reverse=True)
+
+    results = []
+    for d in passed:
+        vid = d["video_id"]
+        results.append({
+            "채널명":        d["channel_name"],
+            "구독자수":      d["subscribers"],
+            "채널평균조회수": d["avg_views"],
+            "썸네일":        build_thumbnail_formula(vid),
+            "제목":          d["title"],
+            "조회수":        d["views"],
+            "업로드일자":    d["upload_date"],
+            "URL":           f"https://www.youtube.com/watch?v={vid}",
+        })
+
+    if callback:
+        callback(1.0, "완료", f"{len(results)}개 영상 수집 완료")
+    return results, errors

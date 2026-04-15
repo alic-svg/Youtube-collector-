@@ -1,5 +1,6 @@
 streamlit>=1.32.0
 requests>=2.31.0
 extra-streamlit-components>=0.1.60
+streamlit-cookies-controller>=0.0.4
 pandas>=2.0.0
 youtube-transcript-api>=0.6.0

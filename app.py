@@ -3,7 +3,7 @@ YouTube 영상 수집기 - 네비게이션 진입점
 """
 
 import streamlit as st
-import extra_streamlit_components as stx
+from streamlit_cookies_controller import CookieController
 from collector import validate_api_key
 
 st.set_page_config(
@@ -14,18 +14,15 @@ st.set_page_config(
 )
 
 # ─────────────────────────────────────────
-# 쿠키 매니저
+# 쿠키 컨트롤러
 # ─────────────────────────────────────────
-cookie_manager = stx.CookieManager(key="yt_cookie_manager")
+cookie = CookieController()
 
 # ─────────────────────────────────────────
 # 세션 초기화
 # ─────────────────────────────────────────
 if "api_key" not in st.session_state:
-    try:
-        saved = cookie_manager.get("yt_api_key") or ""
-    except Exception:
-        saved = ""
+    saved = cookie.get("yt_api_key") or ""
     st.session_state.api_key = saved
 
 if "results" not in st.session_state:
@@ -51,12 +48,8 @@ with st.sidebar:
     with col1:
         if st.button("💾 저장", use_container_width=True):
             st.session_state.api_key = api_input
-            try:
-                cookie_manager.set("yt_api_key", api_input, key="set_cookie")
-                st.success("저장됐습니다.")
-            except Exception:
-                st.session_state.api_key = api_input
-                st.success("저장됐습니다. (세션)")
+            cookie.set("yt_api_key", api_input, max_age=365*24*3600)
+            st.success("저장됐습니다.")
     with col2:
         if st.button("✅ 검증", use_container_width=True):
             if api_input:

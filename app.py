@@ -16,6 +16,7 @@ from collector import (
     validate_api_key,
     get_autocomplete_bulk,
 )
+from transcript import collect_transcripts, extract_video_id
 
 # ─────────────────────────────────────────
 # 페이지 설정
@@ -165,7 +166,7 @@ if not st.session_state.api_key:
 # ─────────────────────────────────────────
 # 탭 구성
 # ─────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["🔍 키워드 검색", "📺 채널 수집", "💡 자동완성 키워드"])
+tab1, tab2, tab3, tab4 = st.tabs(["🔍 키워드 검색", "📺 채널 수집", "💡 자동완성 키워드", "📝 스크립트 수집"])
 
 # ─────────────────────────────────────────
 # 탭 1 - 키워드 검색
@@ -457,6 +458,145 @@ with tab3:
 
 
 # ─────────────────────────────────────────
+# 탭 4 - 스크립트 수집
+# ─────────────────────────────────────────
+with tab4:
+    st.subheader("영상 스크립트 수집")
+    st.caption("API 키 불필요 · 쿼터 소모 없음 · YouTube 자막 기반 텍스트 추출")
+
+    col_left, col_right = st.columns([2, 1])
+
+    with col_left:
+        script_urls_input = st.text_area(
+            "영상 URL 입력 (줄바꿈으로 구분)",
+            placeholder=(
+                "https://www.youtube.com/watch?v=abc123\n"
+                "https://youtu.be/def456\n"
+                "https://www.youtube.com/shorts/ghi789"
+            ),
+            height=220,
+            key="script_urls",
+        )
+
+    with col_right:
+        st.markdown("**🔧 수집 설정**")
+        script_lang = st.selectbox(
+            "자막 언어 우선순위",
+            ["한국어", "일본어", "영어", "자동감지"],
+            key="script_lang",
+            help="선택한 언어의 자막이 없으면 다음 우선순위 언어로 자동 전환됩니다."
+        )
+        st.markdown("""
+        <small>
+        ℹ️ 자막이 없거나 비활성화된 영상은<br>
+        오류 메시지와 함께 표시됩니다.<br><br>
+        수동 자막 → 자동생성 자막 순으로 시도합니다.
+        </small>
+        """, unsafe_allow_html=True)
+
+    if st.button("📝 스크립트 수집 시작", key="btn_script", use_container_width=True, type="primary"):
+        urls = [u.strip() for u in script_urls_input.strip().splitlines() if u.strip()]
+        if not urls:
+            st.error("영상 URL을 한 줄에 하나씩 입력해 주세요.")
+        else:
+            st.info(f"총 **{len(urls)}개** 영상 스크립트 수집 시작")
+            prog = st.progress(0)
+            status_text = st.empty()
+
+            def script_callback(progress, message):
+                prog.progress(min(progress, 1.0))
+                status_text.text(message)
+
+            results = collect_transcripts(
+                urls=urls,
+                api_key=st.session_state.api_key,
+                lang_pref=script_lang,
+                callback=script_callback,
+            )
+            st.session_state.script_results = results
+            prog.progress(1.0)
+            status_text.text(f"완료 · {sum(1 for r in results if r['스크립트'])}개 성공 / {len(results)}개")
+
+    if "script_results" in st.session_state and st.session_state.script_results:
+        script_results = st.session_state.script_results
+        st.divider()
+
+        success = [r for r in script_results if r["스크립트"]]
+        failed  = [r for r in script_results if not r["스크립트"]]
+
+        st.markdown(f"**✅ 성공 {len(success)}개 / ❌ 실패 {len(failed)}개**")
+
+        success = [r for r in script_results if r["스크립트"]]
+        failed  = [r for r in script_results if not r["스크립트"]]
+
+        st.markdown(f"**✅ 성공 {len(success)}개 / ❌ 실패 {len(failed)}개**")
+
+        # 결과 테이블
+        if success:
+            disp_df = pd.DataFrame([
+                {
+                    "썸네일":          r.get("썸네일URL", ""),
+                    "채널명":          r["채널명"],
+                    "구독자수":        f"{r['구독자수']:,}",
+                    "채널평균조회수":  f"{r['채널평균조회수']:,}",
+                    "제목":            r["제목"],
+                    "조회수":          f"{r['조회수']:,}",
+                    "업로드일자":      r["업로드일자"],
+                    "URL":             r["URL"],
+                    "스크립트 미리보기": r["스크립트"][:80] + "…" if len(r["스크립트"]) > 80 else r["스크립트"],
+                    "핵심키워드(태그)": r["핵심키워드(태그)"],
+                }
+                for r in success
+            ])
+            st.dataframe(
+                disp_df,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "썸네일": st.column_config.ImageColumn("썸네일", width="small"),
+                    "URL":    st.column_config.LinkColumn("URL", display_text="▶ 보기"),
+                },
+            )
+
+        # 스크립트 전문 펼침 보기
+        for r in success:
+            vid_id = extract_video_id(r["URL"]) or r["URL"]
+            with st.expander(f"📄 {r['제목']}", expanded=False):
+                st.text_area(
+                    "전체 스크립트",
+                    value=r["스크립트"],
+                    height=250,
+                    key=f"sc_{vid_id}",
+                )
+
+        # 실패 목록
+        if failed:
+            with st.expander(f"❌ 수집 실패 ({len(failed)}개)", expanded=False):
+                for r in failed:
+                    st.markdown(f"- `{r['URL']}` — {r['_오류']}")
+
+        # CSV 다운로드
+        if success:
+            st.divider()
+            buf = io.StringIO()
+            csv_fields = ["채널명", "구독자수", "채널평균조회수", "썸네일",
+                          "제목", "조회수", "업로드일자", "URL", "스크립트", "핵심키워드(태그)"]
+            writer = csv.DictWriter(buf, fieldnames=csv_fields, extrasaction="ignore")
+            writer.writeheader()
+            writer.writerows(success)
+            csv_bytes = buf.getvalue().encode("utf-8-sig")
+            now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            st.download_button(
+                label="⬇️ 스크립트 CSV 다운로드",
+                data=csv_bytes,
+                file_name=f"스크립트수집_{now_str}.csv",
+                mime="text/csv",
+                use_container_width=True,
+                type="primary",
+            )
+
+
+# ─────────────────────────────────────────
 # 결과 출력
 # ─────────────────────────────────────────
 if st.session_state.results is not None:
@@ -472,6 +612,7 @@ if st.session_state.results is not None:
         display_df = pd.DataFrame([
             {
                 "구분":          r.get("구분", ""),
+                "썸네일":        r.get("썸네일URL", ""),
                 "채널명":        r["채널명"],
                 "구독자수":      f"{r['구독자수']:,}",
                 "채널평균조회수": f"{r['채널평균조회수']:,}",
@@ -488,11 +629,12 @@ if st.session_state.results is not None:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "URL": st.column_config.LinkColumn("URL", display_text="▶ 보기"),
+                "썸네일": st.column_config.ImageColumn("썸네일", width="small"),
+                "URL":    st.column_config.LinkColumn("URL", display_text="▶ 보기"),
             },
         )
 
-        # CSV 생성 (썸네일 수식 포함)
+        # CSV 생성 (썸네일 수식 포함, 썸네일URL 제외)
         fieldnames = ["구분", "채널명", "구독자수", "채널평균조회수", "썸네일", "제목", "조회수", "업로드일자", "URL"]
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")

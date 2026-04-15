@@ -127,7 +127,7 @@ with st.sidebar:
 
     st.divider()
 
-    st.link_button("📋 API 키 발급 방법 (스크린샷 가이드)", url="api_guide", use_container_width=True)
+    st.link_button("📋 API 발급방법", url="api_guide", use_container_width=True)
 
     st.divider()
     st.caption("🎬 YouTube 영상 수집기 v1.0")

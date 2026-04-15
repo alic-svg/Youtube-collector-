@@ -70,6 +70,13 @@ tab1, tab2, tab3 = st.tabs(["🔍 수집", "💡 자동완성 키워드", "📝 
 # 탭 1 - 통합 수집
 # ─────────────────────────────────────────
 with tab1:
+    st.caption(
+        "키워드 검색과 채널 수집을 동시에 사용할 수 있습니다. "
+        "키워드만, 채널만, 또는 둘 다 입력해도 동작합니다. "
+        "**출력 항목:** 검색키워드 · 노출순위 · 구분(롱폼/숏폼) · 채널명 · 구독자수 · "
+        "채널평균조회수 · 썸네일 · 제목 · 조회수 · 업로드일자 · URL"
+    )
+
     col_left, col_right = st.columns([5, 4])
 
     # ── 왼쪽: 입력 ──────────────────────────
@@ -77,19 +84,19 @@ with tab1:
         keywords_input = st.text_area(
             "🔑 키워드 (줄바꿈으로 구분)",
             placeholder="인테리어\n셀프인테리어\n홈인테리어",
-            height=140,
+            height=270,
             key="kw_input",
         )
         channel_include_input = st.text_area(
             "📺 수집할 채널 URL (줄바꿈으로 구분 · 비우면 전체 채널 검색)",
             placeholder="https://www.youtube.com/@channelA\nhttps://www.youtube.com/@channelB",
-            height=140,
+            height=130,
             key="ch_include_input",
         )
         channel_exclude_input = st.text_area(
             "🚫 제외할 채널 URL (줄바꿈으로 구분)",
             placeholder="https://www.youtube.com/@excludeThis",
-            height=100,
+            height=90,
             key="ch_exclude_input",
         )
 
@@ -239,7 +246,12 @@ with tab1:
 # ─────────────────────────────────────────
 with tab2:
     st.subheader("YouTube 자동완성 키워드 조회")
-    st.caption("API 키 불필요 · 쿼터 소모 없음 · 검색창 자동완성 그대로 확인")
+    st.caption(
+        "API 키 불필요 · 쿼터 소모 없음. "
+        "YouTube 검색창에서 실제로 자동완성되는 키워드를 대량으로 조회합니다. "
+        "콘텐츠 기획 시 연관 키워드 발굴에 활용하세요. "
+        "**출력 항목:** 입력 키워드 · 자동완성 키워드"
+    )
 
     col_left, col_right = st.columns([2, 1])
 
@@ -312,7 +324,12 @@ with tab2:
 # ─────────────────────────────────────────
 with tab3:
     st.subheader("영상 스크립트 수집")
-    st.caption("API 키 불필요 · 쿼터 소모 없음 · YouTube 자막 기반 텍스트 추출")
+    st.caption(
+        "API 키 불필요 · 쿼터 소모 없음. "
+        "영상 URL을 입력하면 YouTube 자막(수동 자막 우선, 없으면 자동 생성 자막)을 텍스트로 추출합니다. "
+        "자막이 비활성화된 영상은 수집 불가. "
+        "**출력 항목:** 채널명 · 구독자수 · 채널평균조회수 · 썸네일 · 제목 · 조회수 · 업로드일자 · URL · 스크립트 · 핵심키워드(태그)"
+    )
 
     col_left, col_right = st.columns([2, 1])
 

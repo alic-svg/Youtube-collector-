@@ -127,8 +127,8 @@ with st.sidebar:
 
     st.divider()
 
-    st.link_button("📋 API 발급방법", url="api_guide", use_container_width=True)
-
+    if st.button("📋 API 발급방법", use_container_width=True):
+       st.switch_page("pages/api_guide.py")
     st.divider()
     st.caption("🎬 YouTube 영상 수집기 v1.0")
 

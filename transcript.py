@@ -2,6 +2,7 @@
 YouTube 스크립트(자막) 수집 모듈
 - youtube-transcript-api 사용 (쿼터 소모 없음)
 - 영상 메타데이터(제목·조회수·채널·태그)는 YouTube Data API로 조회
+- 프록시 로테이션으로 클라우드 IP 차단 우회
 """
 
 import re
@@ -11,10 +12,8 @@ import requests
 
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
-    _api = YouTubeTranscriptApi()
     _TRANSCRIPT_AVAILABLE = True
 except ImportError:
-    _api = None
     _TRANSCRIPT_AVAILABLE = False
 
 BASE_URL = "https://www.googleapis.com/youtube/v3"
@@ -45,11 +44,28 @@ def build_thumbnail_formula(video_id):
     return f'=IFERROR(IMAGE("https://i.ytimg.com/vi/{video_id}/mqdefault.jpg","",0),"")'
 
 
+def _make_api(proxy_url: str = None):
+    """프록시 URL로 API 인스턴스 생성. 실패 시 직접 연결로 폴백."""
+    if not _TRANSCRIPT_AVAILABLE:
+        return None
+    if proxy_url:
+        try:
+            from youtube_transcript_api.proxies import GenericProxyConfig
+            return YouTubeTranscriptApi(
+                proxy_config=GenericProxyConfig(
+                    http_proxy=proxy_url,
+                    https_proxy=proxy_url,
+                )
+            )
+        except Exception:
+            pass
+    return YouTubeTranscriptApi()
+
+
 # ─────────────────────────────────────────
 # 영상 메타데이터 (Data API)
 # ─────────────────────────────────────────
 def get_video_metadata(video_ids: list, api_key: str):
-    """제목, 채널, 조회수, 태그 일괄 조회"""
     results = {}
     for i in range(0, len(video_ids), 50):
         batch = video_ids[i:i+50]
@@ -66,9 +82,8 @@ def get_video_metadata(video_ids: list, api_key: str):
                 vid   = item["id"]
                 snip  = item["snippet"]
                 stats = item.get("statistics", {})
-                ch_id = snip["channelId"]
                 results[vid] = {
-                    "channel_id":   ch_id,
+                    "channel_id":   snip["channelId"],
                     "channel_name": snip["channelTitle"],
                     "title":        snip["title"],
                     "views":        int(stats.get("viewCount", 0)),
@@ -109,20 +124,34 @@ def get_channel_stats(channel_ids: list, api_key: str):
 
 
 # ─────────────────────────────────────────
-# 자막 수집
+# 자막 수집 (프록시 로테이션)
 # ─────────────────────────────────────────
-def get_transcript(video_id: str, lang_pref: str = "한국어", max_retries: int = 3):
+def get_transcript(video_id: str, lang_pref: str = "한국어", proxy_list: list = None):
     """
     반환: (full_text, lang_used, is_auto, error_msg)
-    블로킹 방지를 위해 재시도 + 지수 백오프 적용
+    proxy_list 가 있으면 랜덤 순서로 순회하며 차단 시 다음 프록시 시도.
+    모든 프록시 소진 후 직접 연결도 시도.
     """
     if not _TRANSCRIPT_AVAILABLE:
         return None, None, None, "youtube-transcript-api 패키지가 설치되지 않았습니다."
 
-    for attempt in range(max_retries):
+    # 시도 순서: 프록시 랜덤 섞기 → 마지막에 직접 연결(None) 추가
+    proxies_to_try = []
+    if proxy_list:
+        shuffled = list(proxy_list)
+        random.shuffle(shuffled)
+        proxies_to_try.extend(shuffled)
+    proxies_to_try.append(None)
+
+    last_err = "알 수 없는 오류"
+
+    for proxy_url in proxies_to_try:
+        api = _make_api(proxy_url)
+        if not api:
+            continue
         try:
             langs = LANG_PRIORITY.get(lang_pref)
-            tl = _api.list(video_id)
+            tl = api.list(video_id)
             transcripts = list(tl)
 
             chosen = None
@@ -130,6 +159,7 @@ def get_transcript(video_id: str, lang_pref: str = "한국어", max_retries: int
             is_auto = False
 
             if langs:
+                # 수동 자막 우선
                 for lang in langs:
                     for t in transcripts:
                         if t.language_code.startswith(lang) and not t.is_generated:
@@ -139,6 +169,7 @@ def get_transcript(video_id: str, lang_pref: str = "한국어", max_retries: int
                             break
                     if chosen:
                         break
+                # 없으면 자동생성 자막
                 if not chosen:
                     for lang in langs:
                         for t in transcripts:
@@ -163,25 +194,28 @@ def get_transcript(video_id: str, lang_pref: str = "한국어", max_retries: int
             return full_text, lang_used, is_auto, None
 
         except Exception as e:
-            err_msg = str(e)
-            # 블로킹/레이트리밋 관련 오류면 대기 후 재시도
-            is_blocking = any(k in err_msg.lower() for k in
-                              ["429", "too many", "blocked", "rate", "timeout", "timed out"])
-            if attempt < max_retries - 1 and is_blocking:
-                wait = (2 ** attempt) * 3 + random.uniform(1.0, 3.0)
-                time.sleep(wait)
+            last_err = str(e)
+            is_blocking = any(k in last_err.lower() for k in
+                              ["blocked", "429", "too many", "rate",
+                               "ipblocked", "requestblocked", "cloud"])
+            if is_blocking:
+                # 차단이면 다음 프록시 시도 (짧은 대기)
+                time.sleep(random.uniform(0.5, 1.5))
                 continue
-            return None, None, None, err_msg
+            # 차단 외 오류(자막 없음 등)는 즉시 반환
+            return None, None, None, last_err
+
+    return None, None, None, f"모든 프록시에서 차단됨 — {last_err}"
 
 
 # ─────────────────────────────────────────
 # 통합 수집
 # ─────────────────────────────────────────
-def collect_transcripts(urls: list, api_key: str, lang_pref: str = "한국어", callback=None):
+def collect_transcripts(urls: list, api_key: str, lang_pref: str = "한국어",
+                        proxy_list: list = None, callback=None):
     """
     URL 목록 → 메타데이터 + 스크립트 수집
-    출력 컬럼: 채널명, 구독자수, 채널평균조회수, 썸네일, 썸네일URL,
-               제목, 조회수, 업로드일자, URL, 스크립트, 핵심키워드(태그)
+    proxy_list: ["http://user:pass@ip:port", ...] 형식의 프록시 목록
     """
     total = len(urls)
 
@@ -203,7 +237,7 @@ def collect_transcripts(urls: list, api_key: str, lang_pref: str = "한국어", 
     channel_ids = list({m["channel_id"] for m in metadata.values() if "channel_id" in m})
     ch_stats = get_channel_stats(channel_ids, api_key) if api_key and channel_ids else {}
 
-    # 4. 자막 수집
+    # 4. 자막 수집 (프록시 로테이션)
     results = []
     for i, url in enumerate(urls):
         if callback:
@@ -220,29 +254,30 @@ def collect_transcripts(urls: list, api_key: str, lang_pref: str = "한국어", 
             })
             continue
 
-        meta  = metadata.get(vid, {})
-        cid   = meta.get("channel_id", "")
-        ch    = ch_stats.get(cid, {"subscribers": 0, "avg_views": 0})
-        tags  = meta.get("tags", [])
+        meta     = metadata.get(vid, {})
+        cid      = meta.get("channel_id", "")
+        ch       = ch_stats.get(cid, {"subscribers": 0, "avg_views": 0})
+        tags     = meta.get("tags", [])
         keywords = ", ".join(tags[:10]) if tags else ""
 
-        text, lang, is_auto, err = get_transcript(vid, lang_pref)
-        # 블로킹 방지: 요청 간 랜덤 딜레이 (1.5~3.5초)
-        time.sleep(random.uniform(1.5, 3.5))
+        text, lang, is_auto, err = get_transcript(vid, lang_pref, proxy_list=proxy_list)
+
+        # 요청 간 딜레이 (프록시 있으면 짧게, 없으면 길게)
+        time.sleep(random.uniform(0.8, 1.8) if proxy_list else random.uniform(2.0, 4.0))
 
         results.append({
-            "채널명":         meta.get("channel_name", ""),
-            "구독자수":       ch["subscribers"],
-            "채널평균조회수": ch["avg_views"],
-            "썸네일":         build_thumbnail_formula(vid),
-            "썸네일URL":      f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
-            "제목":           meta.get("title", vid),
-            "조회수":         meta.get("views", 0),
-            "업로드일자":     meta.get("upload_date", ""),
-            "URL":            url,
-            "스크립트":       text or "",
+            "채널명":           meta.get("channel_name", ""),
+            "구독자수":         ch["subscribers"],
+            "채널평균조회수":   ch["avg_views"],
+            "썸네일":           build_thumbnail_formula(vid),
+            "썸네일URL":        f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
+            "제목":             meta.get("title", vid),
+            "조회수":           meta.get("views", 0),
+            "업로드일자":       meta.get("upload_date", ""),
+            "URL":              url,
+            "스크립트":         text or "",
             "핵심키워드(태그)": keywords,
-            "_오류":          err or "",
+            "_오류":            err or "",
         })
 
     if callback:

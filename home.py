@@ -374,10 +374,17 @@ with tab3:
                 prog.progress(min(progress, 1.0))
                 status_text.text(message)
 
+            # Streamlit Secrets에서 프록시 목록 로드
+            try:
+                proxy_list = list(st.secrets.get("proxies", {}).get("list", []))
+            except Exception:
+                proxy_list = []
+
             results = collect_transcripts(
                 urls=urls,
                 api_key=st.session_state.api_key,
                 lang_pref=script_lang,
+                proxy_list=proxy_list or None,
                 callback=script_callback,
             )
             st.session_state.script_results = results

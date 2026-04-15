@@ -100,7 +100,14 @@ def period_selector(key_prefix: str):
 # ─────────────────────────────────────────
 # 메인 헤더
 # ─────────────────────────────────────────
-st.title("🎬 YouTube 영상 수집기")
+st.markdown("""
+<div style="display:flex;align-items:center;gap:12px;margin-bottom:0.2rem;">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="44" height="44">
+    <path fill="#FF0000" d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+  </svg>
+  <h1 style="margin:0;padding:0;line-height:1.2;">YouTube 영상 수집기</h1>
+</div>
+""", unsafe_allow_html=True)
 
 if not st.session_state.api_key:
     st.warning("👈 왼쪽 사이드바에서 YouTube API 키를 먼저 입력하고 저장해 주세요.")
@@ -127,19 +134,19 @@ with tab1:
     # ── 왼쪽: 입력 ──────────────────────────
     with col_left:
         keywords_input = st.text_area(
-            "🔑 키워드 (줄바꿈으로 구분)",
+            "**🔑 키워드** (줄바꿈으로 구분)",
             placeholder="인테리어\n셀프인테리어\n홈인테리어",
             height=270,
             key="kw_input",
         )
         channel_include_input = st.text_area(
-            "📺 수집할 채널 URL (줄바꿈으로 구분 · 비우면 전체 채널 검색)",
+            "**📺 수집할 채널 URL** (줄바꿈으로 구분 · 비우면 전체 채널 검색)",
             placeholder="https://www.youtube.com/@channelA\nhttps://www.youtube.com/@channelB",
             height=130,
             key="ch_include_input",
         )
         channel_exclude_input = st.text_area(
-            "🚫 제외할 채널 URL (줄바꿈으로 구분)",
+            "**🚫 제외할 채널 URL** (줄바꿈으로 구분)",
             placeholder="https://www.youtube.com/@excludeThis",
             height=90,
             key="ch_exclude_input",
@@ -302,7 +309,7 @@ with tab2:
 
     with col_left:
         ac_input = st.text_area(
-            "키워드 입력 (줄바꿈으로 구분)",
+            "**🔑 키워드** (줄바꿈으로 구분)",
             placeholder="인테리어\n화이트우드\n셀프인테리어\n홈스타일링",
             height=180,
             key="ac_input",
@@ -378,21 +385,28 @@ with tab3:
 
     # ── 사용 방법 + 에이전트 다운로드 ─────────
     with st.expander("📖 사용 방법 — 처음이라면 먼저 읽어주세요", expanded=False):
+        st.markdown("스크립트 수집은 **로컬 에이전트 프로그램**이 필요합니다. YouTube가 서버 IP를 차단하기 때문에 개인 PC에서 직접 수집합니다.")
+        st.markdown("**① 에이전트 설치파일 다운로드**")
+
+        _zip_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent", "YT_Script_Agent_release.zip")
+        if os.path.exists(_zip_path):
+            with open(_zip_path, "rb") as _f:
+                st.download_button(
+                    label="⬇️ 에이전트 다운로드 (Windows)",
+                    data=_f.read(),
+                    file_name="YT_Script_Agent.zip",
+                    mime="application/zip",
+                    type="primary",
+                )
+        else:
+            st.caption("설치파일이 아직 준비되지 않았습니다. 관리자에게 문의해 주세요.")
+
         st.markdown("""
-스크립트 수집은 **로컬 에이전트 프로그램**이 필요합니다.
-YouTube가 서버 IP를 차단하기 때문에, 개인 PC에서 직접 수집합니다.
-
----
-
-**① 에이전트 설치파일 다운로드 (아래 버튼)**
-
 **② 압축 해제 후 `YT_Script_Agent.exe` 실행**
-> Windows 보안 경고가 뜨면:
-> **추가 정보** 클릭 → **실행** 클릭
+> Windows 보안 경고 → **추가 정보** 클릭 → **실행** 클릭
 
-**③ 터미널 창이 열리고 아래 메시지가 보이면 준비 완료**
+**③ 터미널 창에 아래 메시지가 보이면 준비 완료**
 ```
-[OK] Redis connected
 Waiting for jobs... (Ctrl+C to stop)
 ```
 
@@ -400,24 +414,8 @@ Waiting for jobs... (Ctrl+C to stop)
 
 **⑤ 수집이 끝나면 결과가 자동으로 화면에 표시됩니다**
 
----
 > 에이전트는 수집할 때만 켜두면 됩니다. 평소에는 닫아도 됩니다.
 """)
-
-        # 에이전트 zip 다운로드 버튼
-        _zip_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent", "YT_Script_Agent_release.zip")
-        if os.path.exists(_zip_path):
-            with open(_zip_path, "rb") as _f:
-                st.download_button(
-                    label="⬇️ 에이전트 설치파일 다운로드 (Windows)",
-                    data=_f.read(),
-                    file_name="YT_Script_Agent.zip",
-                    mime="application/zip",
-                    use_container_width=True,
-                    type="primary",
-                )
-        else:
-            st.info("설치파일이 아직 준비되지 않았습니다. 관리자에게 문의해 주세요.")
 
     # ── 에이전트 상태 표시 ──────────────────
     upstash_cfg = _upstash_cfg()
@@ -436,7 +434,7 @@ Waiting for jobs... (Ctrl+C to stop)
 
     with col_left:
         script_urls_input = st.text_area(
-            "영상 URL 입력 (줄바꿈으로 구분)",
+            "**🎬 영상 URL** (줄바꿈으로 구분)",
             placeholder=(
                 "https://www.youtube.com/watch?v=abc123\n"
                 "https://youtu.be/def456\n"

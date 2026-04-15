@@ -3,7 +3,6 @@ YouTube Data API 키 발급 가이드 페이지
 """
 
 import os
-import base64
 import streamlit as st
 
 st.set_page_config(
@@ -12,22 +11,12 @@ st.set_page_config(
     layout="wide",
 )
 
-ROOT_DIR = os.getcwd()
+ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 
 def show_img(num: int, caption: str = ""):
     path = os.path.join(ROOT_DIR, f"{num}.png")
     if os.path.exists(path):
-        with open(path, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode()
-        st.markdown(
-            f'<div style="max-width:72%;border:1px solid #e0e0e0;border-radius:6px;'
-            f'overflow:hidden;margin:4px 0 2px 0;">'
-            f'<img src="data:image/png;base64,{b64}" style="width:100%;display:block;" />'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        if caption:
-            st.caption(caption)
+        st.image(path, caption=caption, use_container_width=True)
     else:
         st.markdown(
             f"""<div style="background:#f0f2f6;border:1.5px dashed #bbb;border-radius:8px;

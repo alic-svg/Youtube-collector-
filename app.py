@@ -127,8 +127,16 @@ with st.sidebar:
 
     st.divider()
 
-    if st.button("📋 API 발급방법", use_container_width=True):
-       st.switch_page("pages/api_guide.py")
+    st.markdown(
+        '<a href="/api_guide" target="_self" style="'
+        'display:block;text-align:center;padding:8px 12px;'
+        'background:#f0f2f6;border:1px solid #d9d9d9;border-radius:6px;'
+        'text-decoration:none;color:#262730;font-size:0.875rem;font-weight:400;">'
+        '📋 API 발급방법'
+        '</a>',
+        unsafe_allow_html=True,
+    )
+
     st.divider()
     st.caption("🎬 YouTube 영상 수집기 v1.0")
 

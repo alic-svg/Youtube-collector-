@@ -70,91 +70,106 @@ tab1, tab2, tab3 = st.tabs(["🔍 수집", "💡 자동완성 키워드", "📝 
 # 탭 1 - 통합 수집
 # ─────────────────────────────────────────
 with tab1:
-    st.subheader("영상 수집")
-    st.caption("키워드 검색과 채널 수집을 동시에 사용할 수 있습니다. 각각 선택 입력 가능.")
+    col_left, col_right = st.columns([5, 4])
 
-    col_left, col_right = st.columns([2, 1])
-
+    # ── 왼쪽: 입력 ──────────────────────────
     with col_left:
         keywords_input = st.text_area(
-            "🔑 키워드 (선택 · 줄바꿈으로 구분)",
+            "🔑 키워드 (줄바꿈으로 구분)",
             placeholder="인테리어\n셀프인테리어\n홈인테리어",
-            height=100,
+            height=90,
             key="kw_input",
         )
-
         channel_include_input = st.text_area(
-            "📺 수집할 채널 URL (선택 · 줄바꿈으로 구분)",
+            "📺 수집할 채널 URL (줄바꿈으로 구분 · 비우면 전체 채널 검색)",
             placeholder="https://www.youtube.com/@channelA\nhttps://www.youtube.com/@channelB",
-            height=100,
+            height=90,
             key="ch_include_input",
         )
-
         channel_exclude_input = st.text_area(
-            "🚫 제외할 채널 URL (선택 · 줄바꿈으로 구분)",
+            "🚫 제외할 채널 URL (줄바꿈으로 구분)",
             placeholder="https://www.youtube.com/@excludeThis",
-            height=80,
+            height=68,
             key="ch_exclude_input",
         )
 
+    # ── 오른쪽: 수집 조건 ────────────────────
     with col_right:
-        st.markdown("**🔧 수집 조건**")
-
-        min_views_man = st.number_input(
-            "최소 조회수 (만)",
-            min_value=0.0,
-            value=10.0,
-            step=1.0,
-            format="%.1f",
-            key="col_min_views_man",
-            help="예) 10 = 10만(100,000)회 이상 / 0 = 조건 없음",
-        )
-        min_views = man_to_views(min_views_man)
-        if min_views > 0:
-            st.caption(f"= {min_views:,}회 이상")
+        # 조회수 필터
+        r1, r2 = st.columns([1, 3])
+        use_min_views = r1.checkbox("최소 조회수", value=True, key="use_min_views")
+        if use_min_views:
+            min_views_man = r2.number_input(
+                "만", min_value=0.1, value=10.0, step=1.0, format="%.1f",
+                key="col_min_views_man", label_visibility="collapsed",
+            )
+            min_views = man_to_views(min_views_man)
+            r2.caption(f"{min_views:,}회 이상")
         else:
-            st.caption("= 조건 없음 (전체)")
+            r2.caption("제한 없음")
+            min_views = 0
 
-        days = period_selector("col")
+        # 수집 기간 필터
+        p1, p2 = st.columns([1, 3])
+        use_period = p1.checkbox("수집 기간", value=True, key="use_period")
+        if use_period:
+            with p2:
+                days = period_selector("col")
+        else:
+            p2.caption("전체 기간")
+            days = 36500  # 100년 = 사실상 전체
 
-        st.markdown("**영상 형태**")
+        # 영상 형태
+        st.markdown("<small><b>영상 형태</b></small>", unsafe_allow_html=True)
         fc1, fc2 = st.columns(2)
-        with fc1:
-            inc_longform = st.checkbox("롱폼", value=True, key="col_longform")
-        with fc2:
-            inc_shorts = st.checkbox("숏폼", value=False, key="col_shorts")
+        inc_longform = fc1.checkbox("롱폼", value=True, key="col_longform")
+        inc_shorts   = fc2.checkbox("숏폼", value=False, key="col_shorts")
         if not inc_longform and not inc_shorts:
             st.warning("하나 이상 선택하세요.")
 
-        result_limit = st.number_input(
-            "최대 결과 수", min_value=10, max_value=500, value=100, step=10,
-            key="col_limit", help="필터링 후 조회수 상위 N개만 표시"
-        )
+        # 최대 결과 수
+        lim1, lim2 = st.columns([1, 3])
+        use_limit = lim1.checkbox("최대 결과 수", value=True, key="use_limit")
+        if use_limit:
+            result_limit = lim2.number_input(
+                "개", min_value=10, max_value=500, value=100, step=10,
+                key="col_limit", label_visibility="collapsed",
+            )
+        else:
+            lim2.caption("제한 없음")
+            result_limit = None
 
+        # 상위노출 필터
+        tn1, tn2 = st.columns([1, 3])
+        use_top_n = tn1.checkbox("상위노출 필터", value=False, key="use_top_n")
+        if use_top_n:
+            top_n_val = tn2.number_input(
+                "위까지", min_value=1, max_value=50, value=20, step=1,
+                key="col_top_n", label_visibility="collapsed",
+                help="키워드 검색 상위 N위 이내 영상만 포함",
+            )
+            tn2.caption(f"상위 {top_n_val}위 이내만")
+        else:
+            tn2.caption("제한 없음")
+            top_n_val = None
+
+        # 검색 지역
         region = st.selectbox(
             "검색 지역 / 언어",
             ["🇰🇷 한국 (KR / ko)", "🇯🇵 일본 (JP / ja)", "🌐 전체"],
             key="col_region",
         )
 
-        st.markdown("**정렬 기준**")
+        # 정렬 기준
         sort_by = st.radio(
             "정렬 기준",
             ["조회수 기준", "상위노출 기준"],
             horizontal=True,
             key="col_sort_by",
-            label_visibility="collapsed",
-        )
-
-        top_n_rank = st.number_input(
-            "상위노출 필터 (키워드 검색 상위 N위까지)",
-            min_value=1, max_value=50, value=20, step=1,
-            key="col_top_n",
-            help="키워드 검색 결과 중 상위 N위 이내 영상만 포함. 채널 수집 영상에는 적용 안 됨.",
         )
 
     if st.button("🚀 수집 시작", key="btn_collect", use_container_width=True, type="primary"):
-        keywords = [k.strip() for k in keywords_input.strip().splitlines() if k.strip()]
+        keywords  = [k.strip() for k in keywords_input.strip().splitlines() if k.strip()]
         ch_includes = [u.strip() for u in channel_include_input.strip().splitlines() if u.strip()]
         ch_excludes = [u.strip() for u in channel_exclude_input.strip().splitlines() if u.strip()]
 
@@ -171,26 +186,28 @@ with tab1:
             rc, lc = region_map[region]
 
             parts = []
-            if keywords:
-                parts.append(f"키워드 {len(keywords)}개")
-            if ch_includes:
-                parts.append(f"채널 {len(ch_includes)}개")
-            if ch_excludes:
-                parts.append(f"제외 채널 {len(ch_excludes)}개")
+            if keywords:   parts.append(f"키워드 {len(keywords)}개")
+            if ch_includes: parts.append(f"채널 {len(ch_includes)}개")
+            if ch_excludes: parts.append(f"제외 {len(ch_excludes)}개")
             form_label = "롱폼+숏폼" if inc_longform and inc_shorts else ("롱폼만" if inc_longform else "숏폼만")
-            st.info(f"**{' · '.join(parts)}** · {form_label} · 최소 {views_to_man(min_views)} · {days}일 · 상위 {result_limit}개")
+            search_order = "relevance" if sort_by == "상위노출 기준" else "viewCount"
+            top_n = int(top_n_val) if use_top_n and keywords else None
+
+            filter_parts = [form_label]
+            if use_min_views: filter_parts.append(f"최소 {views_to_man(min_views)}")
+            if use_period:    filter_parts.append(f"{days}일")
+            if use_limit:     filter_parts.append(f"상위 {result_limit}개")
+            if top_n:         filter_parts.append(f"노출 {top_n}위내")
+            st.info(f"**{' · '.join(parts)}** · {' · '.join(filter_parts)}")
 
             prog = st.progress(0)
             step_text = st.empty()
-            msg_text = st.empty()
+            msg_text  = st.empty()
 
             def cb(progress, step, message):
                 prog.progress(min(progress, 1.0))
                 step_text.markdown(f"**{step}**")
                 msg_text.text(message)
-
-            search_order = "relevance" if sort_by == "상위노출 기준" else "viewCount"
-            top_n = int(top_n_rank) if keywords else None
 
             try:
                 results = collect_combined(

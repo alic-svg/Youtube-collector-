@@ -202,23 +202,58 @@ def get_all_video_ids(uploads_pl, api_key):
 
 
 # ─────────────────────────────────────────
+# 자동완성 조회 (API 키 불필요, 쿼터 소모 없음)
+# ─────────────────────────────────────────
+def get_autocomplete(keyword, lang="ko", region="KR"):
+    """YouTube 검색 자동완성 키워드 조회"""
+    try:
+        r = requests.get(
+            "https://suggestqueries.google.com/complete/search",
+            params={"client": "firefox", "ds": "yt", "q": keyword, "hl": lang, "gl": region},
+            timeout=10,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        data = r.json()
+        return data[1] if len(data) > 1 else []
+    except Exception:
+        return []
+
+
+def get_autocomplete_bulk(keywords, lang="ko", region="KR"):
+    """
+    여러 키워드의 자동완성 결과 일괄 조회
+    반환: [{"키워드": kw, "자동완성": [suggestion, ...]}, ...]
+    """
+    results = []
+    for kw in keywords:
+        suggestions = get_autocomplete(kw, lang, region)
+        results.append({"키워드": kw, "자동완성": suggestions})
+        time.sleep(0.2)
+    return results
+
+
+# ─────────────────────────────────────────
 # 수집 메인 함수
 # ─────────────────────────────────────────
 def collect_by_keywords(keywords, min_views, days, api_key,
-                        max_per_keyword=50, region_code="KR", lang_code="ko",
+                        include_longform=True, include_shorts=False,
+                        result_limit=None, region_code="KR", lang_code="ko",
                         callback=None):
     """
-    callback(progress: float 0~1, step: str, message: str)
+    include_longform: 롱폼(60초 초과 + #shorts 미포함) 포함 여부
+    include_shorts:   숏폼(60초 이하 OR #shorts 포함) 포함 여부
+    result_limit:     최종 결과 상한 (None = 제한 없음)
+    검색은 항상 키워드당 50개로 수행 — 필터 후 줄어들기 때문
     """
     pub_after = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
     total_kw = len(keywords)
 
-    # 1. 키워드 검색
+    # 1. 키워드 검색 (항상 50개)
     all_ids, keyword_map = set(), {}
     for i, kw in enumerate(keywords):
         if callback:
             callback(i / total_kw * 0.33, "1/3 키워드 검색", f"'{kw}' 검색 중... ({i+1}/{total_kw})")
-        ids = search_videos(kw, pub_after, api_key, max_per_keyword, region_code, lang_code)
+        ids = search_videos(kw, pub_after, api_key, 50, region_code, lang_code)
         for v in ids:
             keyword_map.setdefault(v, kw)
             all_ids.add(v)
@@ -229,7 +264,6 @@ def collect_by_keywords(keywords, min_views, days, api_key,
 
     # 2. 상세 정보
     id_list = list(all_ids)
-    total_ids = len(id_list)
 
     def detail_cb(done, total):
         if callback:
@@ -242,17 +276,25 @@ def collect_by_keywords(keywords, min_views, days, api_key,
 
     # 3. 필터링 + 채널 통계
     if callback:
-        callback(0.75, "3/3 필터링 및 채널 통계", "숏폼 제외 및 조회수 필터 적용 중...")
+        callback(0.75, "3/3 필터링 및 채널 통계", "필터 적용 중...")
 
-    passed = [
-        {"video_id": vid, **d}
-        for vid, d in details.items()
-        if not is_short(d["duration_sec"], d["title"], d["tags"]) and d["views"] >= min_views
-    ]
+    passed = []
+    for vid, d in details.items():
+        short = is_short(d["duration_sec"], d["title"], d["tags"])
+        if short and not include_shorts:
+            continue
+        if not short and not include_longform:
+            continue
+        if d["views"] < min_views:
+            continue
+        passed.append({"video_id": vid, "is_short": short, **d})
+
     channel_ids = {d["channel_id"] for d in passed}
     ch_stats = get_channel_stats(channel_ids, api_key)
 
     passed.sort(key=lambda x: x["views"], reverse=True)
+    if result_limit:
+        passed = passed[:result_limit]
 
     results = []
     for d in passed:
@@ -264,6 +306,7 @@ def collect_by_keywords(keywords, min_views, days, api_key,
             "구독자수":      ch["subscribers"],
             "채널평균조회수": ch["avg_views"],
             "썸네일":        build_thumbnail_formula(vid),
+            "구분":          "숏폼" if d["is_short"] else "롱폼",
             "제목":          d["title"],
             "조회수":        d["views"],
             "업로드일자":    d["upload_date"],
@@ -275,7 +318,9 @@ def collect_by_keywords(keywords, min_views, days, api_key,
     return results
 
 
-def collect_by_channels(channel_urls, min_views, api_key, callback=None):
+def collect_by_channels(channel_urls, min_views, api_key,
+                        include_longform=True, include_shorts=False,
+                        result_limit=None, callback=None):
     """
     callback(progress: float 0~1, step: str, message: str)
     """
@@ -328,7 +373,7 @@ def collect_by_channels(channel_urls, min_views, api_key, callback=None):
 
     # 4. 필터링
     if callback:
-        callback(0.85, "4/4 필터링 및 정렬", "숏폼 제외 및 조회수 필터 적용 중...")
+        callback(0.85, "4/4 필터링 및 정렬", "필터 적용 중...")
 
     passed = []
     for cid, info in channels.items():
@@ -336,7 +381,10 @@ def collect_by_channels(channel_urls, min_views, api_key, callback=None):
             d = details.get(vid)
             if not d:
                 continue
-            if is_short(d["duration_sec"], d["title"], d["tags"]):
+            short = is_short(d["duration_sec"], d["title"], d["tags"])
+            if short and not include_shorts:
+                continue
+            if not short and not include_longform:
                 continue
             if d["views"] < min_views:
                 continue
@@ -345,10 +393,13 @@ def collect_by_channels(channel_urls, min_views, api_key, callback=None):
                 "channel_name": info["channel_name"],
                 "subscribers":  info["subscribers"],
                 "avg_views":    info["avg_views"],
+                "is_short":     short,
                 **d,
             })
 
     passed.sort(key=lambda x: x["views"], reverse=True)
+    if result_limit:
+        passed = passed[:result_limit]
 
     results = []
     for d in passed:
@@ -358,6 +409,7 @@ def collect_by_channels(channel_urls, min_views, api_key, callback=None):
             "구독자수":      d["subscribers"],
             "채널평균조회수": d["avg_views"],
             "썸네일":        build_thumbnail_formula(vid),
+            "구분":          "숏폼" if d["is_short"] else "롱폼",
             "제목":          d["title"],
             "조회수":        d["views"],
             "업로드일자":    d["upload_date"],

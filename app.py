@@ -14,6 +14,7 @@ from collector import (
     collect_by_keywords,
     collect_by_channels,
     validate_api_key,
+    get_autocomplete_bulk,
 )
 
 # ─────────────────────────────────────────
@@ -164,7 +165,7 @@ if not st.session_state.api_key:
 # ─────────────────────────────────────────
 # 탭 구성
 # ─────────────────────────────────────────
-tab1, tab2 = st.tabs(["🔍 키워드 검색", "📺 채널 수집"])
+tab1, tab2, tab3 = st.tabs(["🔍 키워드 검색", "📺 채널 수집", "💡 자동완성 키워드"])
 
 # ─────────────────────────────────────────
 # 탭 1 - 키워드 검색
@@ -204,9 +205,20 @@ with tab1:
         # 수집 기간
         days_kw = period_selector("kw")
 
-        # 키워드당 최대 영상 수
-        max_per_kw = st.slider(
-            "키워드당 최대 영상 수", min_value=10, max_value=50, value=50, key="kw_max",
+        # 롱폼 / 숏폼 선택
+        st.markdown("**영상 형태**")
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            kw_longform = st.checkbox("롱폼", value=True, key="kw_longform")
+        with fc2:
+            kw_shorts = st.checkbox("숏폼", value=False, key="kw_shorts")
+        if not kw_longform and not kw_shorts:
+            st.warning("롱폼/숏폼 중 하나는 선택해야 합니다.")
+
+        # 최대 결과 수
+        result_limit_kw = st.number_input(
+            "최대 결과 수", min_value=10, max_value=500, value=100, step=10, key="kw_limit",
+            help="필터링 후 조회수 상위 N개만 표시"
         )
 
         # 검색 지역
@@ -220,6 +232,8 @@ with tab1:
         keywords = [k.strip() for k in keywords_input.strip().splitlines() if k.strip()]
         if not keywords:
             st.error("키워드를 한 줄에 하나씩 입력해 주세요.")
+        elif not kw_longform and not kw_shorts:
+            st.error("롱폼/숏폼 중 하나 이상 선택해 주세요.")
         else:
             region_map = {
                 "🇰🇷 한국 (KR / ko)": ("KR", "ko"),
@@ -228,7 +242,8 @@ with tab1:
             }
             rc, lc = region_map[region_kw]
 
-            st.info(f"총 **{len(keywords)}개** 키워드 · 최소 조회수 **{views_to_man(min_views_kw)}** · 기간 **{days_kw}일**")
+            form_label = "롱폼+숏폼" if kw_longform and kw_shorts else ("롱폼만" if kw_longform else "숏폼만")
+            st.info(f"총 **{len(keywords)}개** 키워드 · **{form_label}** · 최소 조회수 **{views_to_man(min_views_kw)}** · 기간 **{days_kw}일** · 상위 **{result_limit_kw}개**")
             prog = st.progress(0)
             step_text = st.empty()
             msg_text = st.empty()
@@ -244,7 +259,9 @@ with tab1:
                     min_views=min_views_kw,
                     days=days_kw,
                     api_key=st.session_state.api_key,
-                    max_per_keyword=max_per_kw,
+                    include_longform=kw_longform,
+                    include_shorts=kw_shorts,
+                    result_limit=result_limit_kw,
                     region_code=rc,
                     lang_code=lc,
                     callback=kw_callback,
@@ -295,9 +312,25 @@ with tab2:
         else:
             st.caption("= 조건 없음 (전체)")
 
+        # 롱폼 / 숏폼 선택
+        st.markdown("**영상 형태**")
+        fc1, fc2 = st.columns(2)
+        with fc1:
+            ch_longform = st.checkbox("롱폼", value=True, key="ch_longform")
+        with fc2:
+            ch_shorts = st.checkbox("숏폼", value=False, key="ch_shorts")
+        if not ch_longform and not ch_shorts:
+            st.warning("롱폼/숏폼 중 하나는 선택해야 합니다.")
+
+        # 최대 결과 수
+        result_limit_ch = st.number_input(
+            "최대 결과 수", min_value=10, max_value=500, value=100, step=10, key="ch_limit",
+            help="필터링 후 조회수 상위 N개만 표시"
+        )
+
         st.markdown("""
         <small>
-        ℹ️ 채널의 전체 영상을 탐색한 뒤<br>숏폼 제외 및 조회수 조건을 적용합니다.<br>
+        ℹ️ 채널의 전체 영상을 탐색한 뒤<br>조건을 적용합니다.<br>
         채널 영상 수가 많을수록 시간이 더 걸립니다.
         </small>
         """, unsafe_allow_html=True)
@@ -306,8 +339,11 @@ with tab2:
         channel_urls = [u.strip() for u in channels_input.strip().splitlines() if u.strip()]
         if not channel_urls:
             st.error("채널 URL을 한 줄에 하나씩 입력해 주세요.")
+        elif not ch_longform and not ch_shorts:
+            st.error("롱폼/숏폼 중 하나 이상 선택해 주세요.")
         else:
-            st.info(f"총 **{len(channel_urls)}개** 채널 · 최소 조회수 **{views_to_man(min_views_ch)}**")
+            ch_form_label = "롱폼+숏폼" if ch_longform and ch_shorts else ("롱폼만" if ch_longform else "숏폼만")
+            st.info(f"총 **{len(channel_urls)}개** 채널 · **{ch_form_label}** · 최소 조회수 **{views_to_man(min_views_ch)}** · 상위 **{result_limit_ch}개**")
             prog = st.progress(0)
             step_text = st.empty()
             msg_text = st.empty()
@@ -322,6 +358,9 @@ with tab2:
                     channel_urls=channel_urls,
                     min_views=min_views_ch,
                     api_key=st.session_state.api_key,
+                    include_longform=ch_longform,
+                    include_shorts=ch_shorts,
+                    result_limit=result_limit_ch,
                     callback=ch_callback,
                 )
                 st.session_state.results = results
@@ -335,6 +374,87 @@ with tab2:
                             st.text(e)
             except Exception as e:
                 st.error(f"오류 발생: {e}")
+
+# ─────────────────────────────────────────
+# 탭 3 - 자동완성 키워드
+# ─────────────────────────────────────────
+with tab3:
+    st.subheader("YouTube 자동완성 키워드 조회")
+    st.caption("API 키 불필요 · 쿼터 소모 없음 · 검색창 자동완성 그대로 확인")
+
+    col_left, col_right = st.columns([2, 1])
+
+    with col_left:
+        ac_input = st.text_area(
+            "키워드 입력 (줄바꿈으로 구분)",
+            placeholder="인테리어\n화이트우드\n셀프인테리어\n홈스타일링",
+            height=180,
+            key="ac_input",
+        )
+
+    with col_right:
+        st.markdown("**🔧 조회 설정**")
+        ac_region = st.selectbox(
+            "검색 지역 / 언어",
+            ["🇰🇷 한국 (KR / ko)", "🇯🇵 일본 (JP / ja)", "🌐 영어 (US / en)"],
+            key="ac_region",
+        )
+
+    if st.button("🔎 자동완성 조회", key="btn_ac", use_container_width=True, type="primary"):
+        keywords = [k.strip() for k in ac_input.strip().splitlines() if k.strip()]
+        if not keywords:
+            st.error("키워드를 한 줄에 하나씩 입력해 주세요.")
+        else:
+            region_map = {
+                "🇰🇷 한국 (KR / ko)": ("KR", "ko"),
+                "🇯🇵 일본 (JP / ja)": ("JP", "ja"),
+                "🌐 영어 (US / en)":  ("US", "en"),
+            }
+            region_code, lang_code = region_map[ac_region]
+
+            with st.spinner(f"{len(keywords)}개 키워드 자동완성 조회 중..."):
+                ac_results = get_autocomplete_bulk(keywords, lang=lang_code, region=region_code)
+
+            st.session_state.ac_results = ac_results
+
+    if "ac_results" in st.session_state and st.session_state.ac_results:
+        ac_results = st.session_state.ac_results
+        st.divider()
+
+        # 키워드별로 펼쳐서 표시
+        all_rows = []
+        for item in ac_results:
+            kw = item["키워드"]
+            suggestions = item["자동완성"]
+
+            with st.expander(f"**{kw}** — {len(suggestions)}개 자동완성", expanded=True):
+                if suggestions:
+                    cols = st.columns(2)
+                    for idx, sug in enumerate(suggestions):
+                        cols[idx % 2].markdown(f"- {sug}")
+                else:
+                    st.caption("자동완성 결과 없음")
+
+            for sug in suggestions:
+                all_rows.append({"입력 키워드": kw, "자동완성 키워드": sug})
+
+        # CSV 다운로드
+        if all_rows:
+            st.divider()
+            buf = io.StringIO()
+            writer = csv.DictWriter(buf, fieldnames=["입력 키워드", "자동완성 키워드"])
+            writer.writeheader()
+            writer.writerows(all_rows)
+            csv_bytes = buf.getvalue().encode("utf-8-sig")
+            now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+            st.download_button(
+                label="⬇️ CSV 다운로드",
+                data=csv_bytes,
+                file_name=f"자동완성키워드_{now_str}.csv",
+                mime="text/csv",
+                use_container_width=True,
+            )
+
 
 # ─────────────────────────────────────────
 # 결과 출력
@@ -351,6 +471,7 @@ if st.session_state.results is not None:
 
         display_df = pd.DataFrame([
             {
+                "구분":          r.get("구분", ""),
                 "채널명":        r["채널명"],
                 "구독자수":      f"{r['구독자수']:,}",
                 "채널평균조회수": f"{r['채널평균조회수']:,}",
@@ -372,7 +493,7 @@ if st.session_state.results is not None:
         )
 
         # CSV 생성 (썸네일 수식 포함)
-        fieldnames = ["채널명", "구독자수", "채널평균조회수", "썸네일", "제목", "조회수", "업로드일자", "URL"]
+        fieldnames = ["구분", "채널명", "구독자수", "채널평균조회수", "썸네일", "제목", "조회수", "업로드일자", "URL"]
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()

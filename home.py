@@ -378,27 +378,7 @@ with tab3:
     # ── 에이전트 상태 표시 ──────────────────
     upstash_cfg = _upstash_cfg()
     if not upstash_cfg:
-        st.warning(
-            "⚠️ Upstash Redis 설정이 없습니다. "
-            "Streamlit Secrets에 `[upstash]` 섹션을 추가해 주세요. "
-            "아래 '설정 방법'을 참고하세요.",
-            icon="⚙️",
-        )
-        with st.expander("⚙️ 설정 방법 보기"):
-            st.markdown("""
-**1. [upstash.com](https://upstash.com) 에서 무료 가입 후 Redis 데이터베이스 생성**
-
-**2. Streamlit Cloud → 앱 Settings → Secrets 에 추가:**
-```toml
-[upstash]
-rest_url   = "https://xxxx.upstash.io"
-rest_token = "AXxxxx..."
-```
-
-**3. 로컬 에이전트(`YT_스크립트_에이전트.exe`) 실행 후 동일한 Upstash 정보 입력**
-
-에이전트가 실행 중이면 이 앱에서 수집 요청 → 에이전트가 처리 → 결과 자동 반환됩니다.
-""")
+        st.error("스크립트 수집 서비스에 연결할 수 없습니다. 관리자에게 문의해 주세요.")
     else:
         online = _agent_online(upstash_cfg)
         if online:

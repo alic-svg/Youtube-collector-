@@ -9,6 +9,11 @@ echo  (Sign up free at upstash.com, then check REST API tab)
 echo.
 set /p UPSTASH_URL="  Upstash REST URL   : "
 set /p UPSTASH_TOKEN="  Upstash REST TOKEN : "
+
+:: Remove surrounding quotes if user typed them
+set UPSTASH_URL=%UPSTASH_URL:"=%
+set UPSTASH_TOKEN=%UPSTASH_TOKEN:"=%
+
 echo.
 
 if not exist dist mkdir dist
@@ -21,21 +26,25 @@ echo  [OK] config.json created.
 
 echo.
 echo  Installing packages...
-pip install -r requirements.txt --quiet
+py -m pip install -r requirements.txt --quiet
 if errorlevel 1 (
-    echo [ERROR] pip install failed.
-    pause
-    exit /b 1
+    python -m pip install -r requirements.txt --quiet
+    if errorlevel 1 (
+        echo [ERROR] pip install failed. Make sure Python is installed.
+        pause
+        exit /b 1
+    )
 )
 
 echo  Building EXE...
-pyinstaller --onefile --console --name "YT_Script_Agent" --hidden-import=youtube_transcript_api --hidden-import=youtube_transcript_api.proxies --hidden-import=requests --distpath dist main.py
-
+py -m PyInstaller --onefile --console --name "YT_Script_Agent" --hidden-import=youtube_transcript_api --hidden-import=youtube_transcript_api.proxies --hidden-import=requests --distpath dist main.py
 if errorlevel 1 (
-    echo.
-    echo [ERROR] Build failed.
-    pause
-    exit /b 1
+    python -m PyInstaller --onefile --console --name "YT_Script_Agent" --hidden-import=youtube_transcript_api --hidden-import=youtube_transcript_api.proxies --hidden-import=requests --distpath dist main.py
+    if errorlevel 1 (
+        echo [ERROR] Build failed.
+        pause
+        exit /b 1
+    )
 )
 
 echo.
@@ -45,13 +54,8 @@ powershell -Command "Compress-Archive -Path 'dist\YT_Script_Agent.exe','dist\con
 echo.
 echo ================================================
 echo  Build complete!
-echo.
 echo  Distribute: dist\YT_Script_Agent_release.zip
-echo.
-echo  User instructions:
-echo    1. Unzip the file
-echo    2. Double-click YT_Script_Agent.exe
-echo    3. Done (no configuration needed)
+echo  Users just unzip and double-click the EXE.
 echo ================================================
 echo.
 pause

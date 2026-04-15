@@ -11,7 +11,7 @@ st.set_page_config(
     layout="wide",
 )
 
-ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
+ROOT_DIR = os.getcwd()
 
 def show_img(num: int, caption: str = ""):
     path = os.path.join(ROOT_DIR, f"{num}.png")

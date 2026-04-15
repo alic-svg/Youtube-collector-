@@ -5,6 +5,7 @@ YouTube 영상 수집기 - 메인 페이지 콘텐츠
 import csv
 import io
 import json
+import os
 import uuid
 import time
 from datetime import datetime, timedelta, date
@@ -375,6 +376,49 @@ with tab3:
         "**출력 항목:** 채널명 · 구독자수 · 채널평균조회수 · 썸네일 · 제목 · 조회수 · 업로드일자 · URL · 스크립트 · 핵심키워드(태그)"
     )
 
+    # ── 사용 방법 + 에이전트 다운로드 ─────────
+    with st.expander("📖 사용 방법 — 처음이라면 먼저 읽어주세요", expanded=False):
+        st.markdown("""
+스크립트 수집은 **로컬 에이전트 프로그램**이 필요합니다.
+YouTube가 서버 IP를 차단하기 때문에, 개인 PC에서 직접 수집합니다.
+
+---
+
+**① 에이전트 설치파일 다운로드 (아래 버튼)**
+
+**② 압축 해제 후 `YT_Script_Agent.exe` 실행**
+> Windows 보안 경고가 뜨면:
+> **추가 정보** 클릭 → **실행** 클릭
+
+**③ 터미널 창이 열리고 아래 메시지가 보이면 준비 완료**
+```
+[OK] Redis connected
+Waiting for jobs... (Ctrl+C to stop)
+```
+
+**④ 에이전트 창을 닫지 않은 채로** 이 페이지에서 URL 입력 후 수집 시작
+
+**⑤ 수집이 끝나면 결과가 자동으로 화면에 표시됩니다**
+
+---
+> 에이전트는 수집할 때만 켜두면 됩니다. 평소에는 닫아도 됩니다.
+""")
+
+        # 에이전트 zip 다운로드 버튼
+        _zip_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent", "YT_Script_Agent_release.zip")
+        if os.path.exists(_zip_path):
+            with open(_zip_path, "rb") as _f:
+                st.download_button(
+                    label="⬇️ 에이전트 설치파일 다운로드 (Windows)",
+                    data=_f.read(),
+                    file_name="YT_Script_Agent.zip",
+                    mime="application/zip",
+                    use_container_width=True,
+                    type="primary",
+                )
+        else:
+            st.info("설치파일이 아직 준비되지 않았습니다. 관리자에게 문의해 주세요.")
+
     # ── 에이전트 상태 표시 ──────────────────
     upstash_cfg = _upstash_cfg()
     if not upstash_cfg:
@@ -382,9 +426,9 @@ with tab3:
     else:
         online = _agent_online(upstash_cfg)
         if online:
-            st.success("🟢 로컬 에이전트 연결됨 — 수집 준비 완료", icon="✅")
+            st.success("🟢 로컬 에이전트 연결됨 — 수집 준비 완료")
         else:
-            st.warning("🔴 로컬 에이전트 오프라인 — 에이전트를 먼저 실행해 주세요.", icon="⚠️")
+            st.warning("🔴 로컬 에이전트 오프라인 — 에이전트를 먼저 실행해 주세요.")
 
     st.divider()
 
@@ -605,17 +649,17 @@ if st.session_state.results is not None:
 
         display_df = pd.DataFrame([
             {
-                "검색키워드":    r.get("검색키워드", ""),
-                "노출순위":      r.get("노출순위", "-"),
-                "구분":          r.get("구분", ""),
-                "썸네일":        r.get("썸네일URL", ""),
-                "채널명":        r["채널명"],
-                "구독자수":      f"{r['구독자수']:,}",
+                "검색키워드":     r.get("검색키워드", ""),
+                "노출순위":       r.get("노출순위", "-"),
+                "구분":           r.get("구분", ""),
+                "썸네일":         r.get("썸네일URL", ""),
+                "제목":           r["제목"],
+                "채널명":         r["채널명"],
+                "구독자수":       f"{r['구독자수']:,}",
                 "채널평균조회수": f"{r['채널평균조회수']:,}",
-                "제목":          r["제목"],
-                "조회수":        f"{r['조회수']:,}",
-                "업로드일자":    r["업로드일자"],
-                "URL":           r["URL"],
+                "조회수":         f"{r['조회수']:,}",
+                "업로드일자":     r["업로드일자"],
+                "URL":            r["URL"],
             }
             for r in results
         ])
@@ -624,6 +668,7 @@ if st.session_state.results is not None:
             display_df,
             use_container_width=True,
             hide_index=True,
+            height=1000,
             row_height=90,
             column_config={
                 "썸네일": st.column_config.ImageColumn("썸네일", width="medium"),

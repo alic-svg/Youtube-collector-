@@ -49,13 +49,16 @@ if errorlevel 1 (
 
 echo.
 echo  Creating zip package...
-powershell -Command "Compress-Archive -Path 'dist\YT_Script_Agent.exe','dist\config.json' -DestinationPath 'dist\YT_Script_Agent_release.zip' -Force"
+powershell -Command "Compress-Archive -Path 'dist\YT_Script_Agent.exe','dist\config.json' -DestinationPath 'YT_Script_Agent_release.zip' -Force"
 
 echo.
 echo ================================================
 echo  Build complete!
-echo  Distribute: dist\YT_Script_Agent_release.zip
-echo  Users just unzip and double-click the EXE.
+echo.
+echo  1. Commit 'agent\YT_Script_Agent_release.zip' to GitHub
+echo     (the app serves this file as a download button)
+echo.
+echo  2. Users just unzip and double-click YT_Script_Agent.exe
 echo ================================================
 echo.
 pause

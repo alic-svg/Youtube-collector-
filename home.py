@@ -4,19 +4,63 @@ YouTube 영상 수집기 - 메인 페이지 콘텐츠
 
 import csv
 import io
+import json
+import uuid
+import time
 from datetime import datetime, timedelta, date
 
+import requests
 import pandas as pd
 import streamlit as st
 
 from collector import collect_combined, get_autocomplete_bulk
-from transcript import collect_transcripts, extract_video_id
+from transcript import extract_video_id, get_video_metadata, get_channel_stats, build_thumbnail_formula
 
 # ─────────────────────────────────────────
 # 유틸
 # ─────────────────────────────────────────
 def man_to_views(man_value: float) -> int:
     return int(man_value * 10_000)
+
+
+# ─────────────────────────────────────────
+# Upstash Redis 헬퍼 (로컬 에이전트 연동)
+# ─────────────────────────────────────────
+def _upstash_cfg():
+    """Secrets에서 Upstash 설정 읽기. 없으면 None."""
+    try:
+        u = st.secrets.get("upstash", {})
+        url   = u.get("rest_url", "").rstrip("/")
+        token = u.get("rest_token", "")
+        if url and token:
+            return {"url": url, "token": token}
+    except Exception:
+        pass
+    return None
+
+def _redis(cfg, *args):
+    """Redis 명령 실행. 실패 시 None."""
+    try:
+        r = requests.post(
+            cfg["url"],
+            headers={"Authorization": f"Bearer {cfg['token']}",
+                     "Content-Type": "application/json"},
+            json=list(args),
+            timeout=10,
+        )
+        return r.json().get("result")
+    except Exception:
+        return None
+
+def _agent_online(cfg) -> bool:
+    """에이전트 하트비트 확인 (30초 이내 갱신 여부)."""
+    val = _redis(cfg, "GET", "yt_agent_heartbeat")
+    if not val:
+        return False
+    try:
+        return (time.time() - int(val)) <= 30
+    except Exception:
+        return False
 
 def views_to_man(views: int) -> str:
     v = views / 10_000
@@ -320,7 +364,7 @@ with tab2:
             )
 
 # ─────────────────────────────────────────
-# 탭 3 - 스크립트 수집
+# 탭 3 - 스크립트 수집 (로컬 에이전트 연동)
 # ─────────────────────────────────────────
 with tab3:
     st.subheader("영상 스크립트 수집")
@@ -330,6 +374,39 @@ with tab3:
         "자막이 비활성화된 영상은 수집 불가. "
         "**출력 항목:** 채널명 · 구독자수 · 채널평균조회수 · 썸네일 · 제목 · 조회수 · 업로드일자 · URL · 스크립트 · 핵심키워드(태그)"
     )
+
+    # ── 에이전트 상태 표시 ──────────────────
+    upstash_cfg = _upstash_cfg()
+    if not upstash_cfg:
+        st.warning(
+            "⚠️ Upstash Redis 설정이 없습니다. "
+            "Streamlit Secrets에 `[upstash]` 섹션을 추가해 주세요. "
+            "아래 '설정 방법'을 참고하세요.",
+            icon="⚙️",
+        )
+        with st.expander("⚙️ 설정 방법 보기"):
+            st.markdown("""
+**1. [upstash.com](https://upstash.com) 에서 무료 가입 후 Redis 데이터베이스 생성**
+
+**2. Streamlit Cloud → 앱 Settings → Secrets 에 추가:**
+```toml
+[upstash]
+rest_url   = "https://xxxx.upstash.io"
+rest_token = "AXxxxx..."
+```
+
+**3. 로컬 에이전트(`YT_스크립트_에이전트.exe`) 실행 후 동일한 Upstash 정보 입력**
+
+에이전트가 실행 중이면 이 앱에서 수집 요청 → 에이전트가 처리 → 결과 자동 반환됩니다.
+""")
+    else:
+        online = _agent_online(upstash_cfg)
+        if online:
+            st.success("🟢 로컬 에이전트 연결됨 — 수집 준비 완료", icon="✅")
+        else:
+            st.warning("🔴 로컬 에이전트 오프라인 — 에이전트를 먼저 실행해 주세요.", icon="⚠️")
+
+    st.divider()
 
     col_left, col_right = st.columns([2, 1])
 
@@ -361,35 +438,95 @@ with tab3:
         </small>
         """, unsafe_allow_html=True)
 
-    if st.button("📝 스크립트 수집 시작", key="btn_script", use_container_width=True, type="primary"):
+    # ── 수집 시작 버튼 ──────────────────────
+    if st.button("📝 스크립트 수집 시작", key="btn_script",
+                 use_container_width=True, type="primary",
+                 disabled=(not upstash_cfg)):
         urls = [u.strip() for u in script_urls_input.strip().splitlines() if u.strip()]
         if not urls:
             st.error("영상 URL을 한 줄에 하나씩 입력해 주세요.")
+        elif not _agent_online(upstash_cfg):
+            st.error("로컬 에이전트가 실행 중이지 않습니다. 에이전트를 먼저 실행해 주세요.")
         else:
-            st.info(f"총 **{len(urls)}개** 영상 스크립트 수집 시작")
-            prog = st.progress(0)
-            status_text = st.empty()
+            # 영상 ID 추출
+            url_id_map = {u: extract_video_id(u) for u in urls}
+            valid_ids  = [vid for vid in url_id_map.values() if vid]
 
-            def script_callback(progress, message):
-                prog.progress(min(progress, 1.0))
-                status_text.text(message)
+            # 메타데이터 수집 (클라우드에서 처리)
+            with st.spinner("영상 정보 조회 중..."):
+                api_key  = st.session_state.api_key
+                metadata = get_video_metadata(valid_ids, api_key) if api_key else {}
+                ch_ids   = list({m["channel_id"] for m in metadata.values() if "channel_id" in m})
+                ch_stats = get_channel_stats(ch_ids, api_key) if api_key and ch_ids else {}
 
-            # Streamlit Secrets에서 프록시 목록 로드
+            # Redis에 작업 제출
+            job_id = str(uuid.uuid4())
+            job_payload = json.dumps({
+                "job_id":    job_id,
+                "video_ids": valid_ids,
+                "lang_pref": script_lang,
+            }, ensure_ascii=False)
+            _redis(upstash_cfg, "RPUSH", "yt_jobs", job_payload)
+
+            # 세션에 작업 정보 저장
+            st.session_state.script_job = {
+                "job_id":    job_id,
+                "urls":      urls,
+                "url_id_map": url_id_map,
+                "metadata":  metadata,
+                "ch_stats":  ch_stats,
+            }
+            st.session_state.pop("script_results", None)
+            st.rerun()
+
+    # ── 결과 대기 / 표시 ────────────────────
+    if "script_job" in st.session_state and upstash_cfg:
+        job_info = st.session_state.script_job
+        job_id   = job_info["job_id"]
+
+        raw = _redis(upstash_cfg, "GET", f"yt_result:{job_id}")
+        if raw:
+            # 결과 도착 → 파싱 후 세션에 저장
             try:
-                proxy_list = list(st.secrets.get("proxies", {}).get("list", []))
+                data = json.loads(raw)
+                transcripts = data.get("transcripts", {})
             except Exception:
-                proxy_list = []
+                transcripts = {}
 
-            results = collect_transcripts(
-                urls=urls,
-                api_key=st.session_state.api_key,
-                lang_pref=script_lang,
-                proxy_list=proxy_list or None,
-                callback=script_callback,
-            )
-            st.session_state.script_results = results
-            prog.progress(1.0)
-            status_text.text(f"완료 · {sum(1 for r in results if r['스크립트'])}개 성공 / {len(results)}개")
+            # 메타데이터 + 자막 병합
+            merged = []
+            for url in job_info["urls"]:
+                vid  = job_info["url_id_map"].get(url)
+                meta = job_info["metadata"].get(vid, {}) if vid else {}
+                cid  = meta.get("channel_id", "")
+                ch   = job_info["ch_stats"].get(cid, {"subscribers": 0, "avg_views": 0})
+                tags = meta.get("tags", [])
+                tr   = transcripts.get(vid, {}) if vid else {}
+                merged.append({
+                    "채널명":           meta.get("channel_name", ""),
+                    "구독자수":         ch["subscribers"],
+                    "채널평균조회수":   ch["avg_views"],
+                    "썸네일URL":        f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg" if vid else "",
+                    "제목":             meta.get("title", url),
+                    "조회수":           meta.get("views", 0),
+                    "업로드일자":       meta.get("upload_date", ""),
+                    "URL":              url,
+                    "스크립트":         tr.get("text", ""),
+                    "핵심키워드(태그)": ", ".join(tags[:10]),
+                    "_오류":            tr.get("error", "") or ("유효하지 않은 URL" if not vid else ""),
+                })
+
+            st.session_state.script_results = merged
+            del st.session_state.script_job
+            st.rerun()
+
+        else:
+            # 아직 처리 중
+            total_vids = len([v for v in job_info["url_id_map"].values() if v])
+            st.info(f"⏳ 로컬 에이전트가 처리 중입니다... ({total_vids}개 영상)")
+            st.caption("영상 1개당 약 2~4초 소요됩니다. 이 페이지를 닫지 마세요.")
+            time.sleep(3)
+            st.rerun()
 
     if "script_results" in st.session_state and st.session_state.script_results:
         script_results = st.session_state.script_results
@@ -401,14 +538,14 @@ with tab3:
         if success:
             disp_df = pd.DataFrame([
                 {
-                    "썸네일":          r.get("썸네일URL", ""),
-                    "채널명":          r["채널명"],
-                    "구독자수":        f"{r['구독자수']:,}",
-                    "채널평균조회수":  f"{r['채널평균조회수']:,}",
-                    "제목":            r["제목"],
-                    "조회수":          f"{r['조회수']:,}",
-                    "업로드일자":      r["업로드일자"],
-                    "URL":             r["URL"],
+                    "썸네일":           r.get("썸네일URL", ""),
+                    "채널명":           r["채널명"],
+                    "구독자수":         f"{r['구독자수']:,}",
+                    "채널평균조회수":   f"{r['채널평균조회수']:,}",
+                    "제목":             r["제목"],
+                    "조회수":           f"{r['조회수']:,}",
+                    "업로드일자":       r["업로드일자"],
+                    "URL":              r["URL"],
                     "스크립트 미리보기": r["스크립트"][:80] + "…" if len(r["스크립트"]) > 80 else r["스크립트"],
                     "핵심키워드(태그)": r["핵심키워드(태그)"],
                 }
@@ -438,7 +575,7 @@ with tab3:
         if success:
             st.divider()
             buf = io.StringIO()
-            csv_fields = ["채널명", "구독자수", "채널평균조회수", "썸네일",
+            csv_fields = ["채널명", "구독자수", "채널평균조회수", "썸네일URL",
                           "제목", "조회수", "업로드일자", "URL", "스크립트", "핵심키워드(태그)"]
             writer = csv.DictWriter(buf, fieldnames=csv_fields, extrasaction="ignore")
             writer.writeheader()

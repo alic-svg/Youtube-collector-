@@ -57,7 +57,7 @@ def is_short(duration_sec, title, tags):
 
 
 def parse_channel_urls(urls):
-    """URL 목록에서 @핸들 추출"""
+    """URL 목록에서 @핸들 또는 채널 ID(UC...) 추출"""
     handles = []
     for url in urls:
         url = url.strip()
@@ -69,6 +69,10 @@ def parse_channel_urls(urls):
             m = re.search(r"/@([^/\s?]+)", path)
             if m:
                 handles.append(m.group(1))
+        elif "/channel/" in path:
+            m = re.search(r"/channel/([A-Za-z0-9_-]{10,})", path)
+            if m:
+                handles.append(m.group(1))  # 채널 ID 그대로 사용
     return handles
 
 
@@ -162,11 +166,12 @@ def get_channel_stats(channel_ids, api_key):
 
 
 def get_channel_info(handle, api_key):
-    d, err = api_get(
-        "channels",
-        {"part": "id,snippet,statistics,contentDetails", "forHandle": handle},
-        api_key,
-    )
+    # UC로 시작하는 채널 ID면 id 파라미터, 아니면 @핸들로 조회
+    if re.match(r"^UC[A-Za-z0-9_-]{22}$", handle):
+        param = {"part": "id,snippet,statistics,contentDetails", "id": handle}
+    else:
+        param = {"part": "id,snippet,statistics,contentDetails", "forHandle": handle}
+    d, err = api_get("channels", param, api_key)
     if not d or not d.get("items"):
         return None, err
     item = d["items"][0]

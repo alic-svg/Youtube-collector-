@@ -77,19 +77,19 @@ with tab1:
         keywords_input = st.text_area(
             "🔑 키워드 (줄바꿈으로 구분)",
             placeholder="인테리어\n셀프인테리어\n홈인테리어",
-            height=90,
+            height=140,
             key="kw_input",
         )
         channel_include_input = st.text_area(
             "📺 수집할 채널 URL (줄바꿈으로 구분 · 비우면 전체 채널 검색)",
             placeholder="https://www.youtube.com/@channelA\nhttps://www.youtube.com/@channelB",
-            height=90,
+            height=140,
             key="ch_include_input",
         )
         channel_exclude_input = st.text_area(
             "🚫 제외할 채널 URL (줄바꿈으로 구분)",
             placeholder="https://www.youtube.com/@excludeThis",
-            height=68,
+            height=100,
             key="ch_exclude_input",
         )
 
@@ -394,8 +394,9 @@ with tab3:
                 disp_df,
                 use_container_width=True,
                 hide_index=True,
+                row_height=90,
                 column_config={
-                    "썸네일": st.column_config.ImageColumn("썸네일", width="small"),
+                    "썸네일": st.column_config.ImageColumn("썸네일", width="medium"),
                     "URL":    st.column_config.LinkColumn("URL", display_text="▶ 보기"),
                 },
             )
@@ -453,6 +454,14 @@ if st.session_state.results is not None:
 
         st.caption(f"총 **{len(results)}개** 영상 · {sort_label}")
 
+        # 행 높이 / 썸네일 행간 확장 CSS
+        st.markdown("""
+        <style>
+        [data-testid="stDataFrameResizable"] .ag-row { min-height: 90px !important; }
+        [data-testid="stDataFrameResizable"] .ag-cell { line-height: 1.6 !important; }
+        </style>
+        """, unsafe_allow_html=True)
+
         display_df = pd.DataFrame([
             {
                 "검색키워드":    r.get("검색키워드", ""),
@@ -474,8 +483,9 @@ if st.session_state.results is not None:
             display_df,
             use_container_width=True,
             hide_index=True,
+            row_height=90,
             column_config={
-                "썸네일": st.column_config.ImageColumn("썸네일", width="small"),
+                "썸네일": st.column_config.ImageColumn("썸네일", width="medium"),
                 "URL":    st.column_config.LinkColumn("URL", display_text="▶ 보기"),
             },
         )

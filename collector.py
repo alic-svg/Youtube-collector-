@@ -235,6 +235,141 @@ def get_autocomplete_bulk(keywords, lang="ko", region="KR"):
 # ─────────────────────────────────────────
 # 수집 메인 함수
 # ─────────────────────────────────────────
+def collect_combined(keywords, channel_urls, exclude_urls, min_views, days, api_key,
+                     include_longform=True, include_shorts=False,
+                     result_limit=None, region_code="KR", lang_code="ko",
+                     callback=None):
+    """
+    키워드 검색 + 채널 수집 통합 함수
+    - keywords:      키워드 목록 (없으면 스킵)
+    - channel_urls:  수집할 채널 URL 목록 (없으면 스킵)
+    - exclude_urls:  제외할 채널 URL 목록
+    """
+    pub_after = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
+    all_ids = set()
+    include_ch_stats = {}   # 채널 수집 채널들의 구독자/평균조회수
+    channel_video_map = {}  # cid → [video_ids] (채널 수집용)
+
+    total_steps = sum([bool(keywords), bool(channel_urls)])
+    step = 0
+
+    # ── 1. 키워드 검색 ──────────────────────
+    if keywords:
+        total_kw = len(keywords)
+        for i, kw in enumerate(keywords):
+            if callback:
+                callback(step / max(total_steps, 1) * 0.3 + i / total_kw * 0.3,
+                         "키워드 검색", f"'{kw}' 검색 중... ({i+1}/{total_kw})")
+            ids = search_videos(kw, pub_after, api_key, 50, region_code, lang_code)
+            all_ids.update(ids)
+            time.sleep(0.4)
+        step += 1
+        if callback:
+            callback(step / max(total_steps, 1) * 0.3,
+                     "키워드 검색", f"완료 · {len(all_ids)}개 ID 수집")
+
+    # ── 2. 채널 수집 ────────────────────────
+    if channel_urls:
+        handles = parse_channel_urls(channel_urls)
+        channels = {}
+        total_ch = len(handles)
+        for i, handle in enumerate(handles):
+            if callback:
+                callback(step / max(total_steps, 1) * 0.3 + i / max(total_ch, 1) * 0.15,
+                         "채널 정보 수집", f"@{handle} 수집 중... ({i+1}/{total_ch})")
+            info, err = get_channel_info(handle, api_key)
+            if info:
+                channels[info["channel_id"]] = info
+            time.sleep(0.3)
+
+        for i, (cid, info) in enumerate(channels.items()):
+            if callback:
+                callback(step / max(total_steps, 1) * 0.3 + 0.15 + i / max(len(channels), 1) * 0.1,
+                         "채널 영상 목록 수집", f"{info['channel_name']} 영상 목록 수집 중...")
+            ids = get_all_video_ids(info["uploads_pl"], api_key)
+            channel_video_map[cid] = ids
+            all_ids.update(ids)
+            include_ch_stats[cid] = {"subscribers": info["subscribers"], "avg_views": info["avg_views"]}
+            time.sleep(0.3)
+        step += 1
+
+    # ── 3. 제외 채널 ID 확인 ─────────────────
+    exclude_ids = set()
+    if exclude_urls:
+        exclude_handles = parse_channel_urls(exclude_urls)
+        if callback:
+            callback(0.55, "제외 채널 확인", f"{len(exclude_handles)}개 채널 ID 조회 중...")
+        for handle in exclude_handles:
+            info, _ = get_channel_info(handle, api_key)
+            if info:
+                exclude_ids.add(info["channel_id"])
+            time.sleep(0.2)
+
+    # ── 4. 영상 상세 정보 ────────────────────
+    id_list = list(all_ids)
+    if callback:
+        callback(0.58, "영상 정보 수집", f"총 {len(id_list)}개 영상 정보 수집 중...")
+
+    def detail_cb(done, total):
+        if callback:
+            callback(0.58 + done / max(total, 1) * 0.25,
+                     "영상 정보 수집", f"({done}/{total})")
+
+    details = get_video_details(id_list, api_key, callback=detail_cb)
+
+    # ── 5. 필터링 ────────────────────────────
+    if callback:
+        callback(0.84, "필터링", "조건 적용 중...")
+
+    passed = []
+    for vid, d in details.items():
+        if d["channel_id"] in exclude_ids:
+            continue
+        # 채널 수집 영상은 날짜 필터 적용
+        if vid in {v for ids in channel_video_map.values() for v in ids}:
+            if d["upload_date"] < pub_after[:10]:
+                continue
+        short = is_short(d["duration_sec"], d["title"], d["tags"])
+        if short and not include_shorts:
+            continue
+        if not short and not include_longform:
+            continue
+        if d["views"] < min_views:
+            continue
+        passed.append({"video_id": vid, "is_short": short, **d})
+
+    # ── 6. 채널 통계 (키워드 결과 채널) ──────
+    kw_channel_ids = {d["channel_id"] for d in passed} - set(include_ch_stats.keys())
+    ch_stats = get_channel_stats(kw_channel_ids, api_key) if kw_channel_ids else {}
+    ch_stats.update(include_ch_stats)
+
+    passed.sort(key=lambda x: x["views"], reverse=True)
+    if result_limit:
+        passed = passed[:result_limit]
+
+    results = []
+    for d in passed:
+        cid = d["channel_id"]
+        ch = ch_stats.get(cid, {"subscribers": 0, "avg_views": 0})
+        vid = d["video_id"]
+        results.append({
+            "채널명":        d["channel_name"],
+            "구독자수":      ch["subscribers"],
+            "채널평균조회수": ch["avg_views"],
+            "썸네일":        build_thumbnail_formula(vid),
+            "썸네일URL":     f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
+            "구분":          "숏폼" if d["is_short"] else "롱폼",
+            "제목":          d["title"],
+            "조회수":        d["views"],
+            "업로드일자":    d["upload_date"],
+            "URL":           f"https://www.youtube.com/watch?v={vid}",
+        })
+
+    if callback:
+        callback(1.0, "완료", f"{len(results)}개 영상 수집 완료")
+    return results
+
+
 def collect_by_keywords(keywords, min_views, days, api_key,
                         include_longform=True, include_shorts=False,
                         result_limit=None, region_code="KR", lang_code="ko",

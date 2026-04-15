@@ -137,6 +137,22 @@ with tab1:
             key="col_region",
         )
 
+        st.markdown("**정렬 기준**")
+        sort_by = st.radio(
+            "정렬 기준",
+            ["조회수 기준", "상위노출 기준"],
+            horizontal=True,
+            key="col_sort_by",
+            label_visibility="collapsed",
+        )
+
+        top_n_rank = st.number_input(
+            "상위노출 필터 (키워드 검색 상위 N위까지)",
+            min_value=1, max_value=50, value=20, step=1,
+            key="col_top_n",
+            help="키워드 검색 결과 중 상위 N위 이내 영상만 포함. 채널 수집 영상에는 적용 안 됨.",
+        )
+
     if st.button("🚀 수집 시작", key="btn_collect", use_container_width=True, type="primary"):
         keywords = [k.strip() for k in keywords_input.strip().splitlines() if k.strip()]
         ch_includes = [u.strip() for u in channel_include_input.strip().splitlines() if u.strip()]
@@ -173,6 +189,9 @@ with tab1:
                 step_text.markdown(f"**{step}**")
                 msg_text.text(message)
 
+            search_order = "relevance" if sort_by == "상위노출 기준" else "viewCount"
+            top_n = int(top_n_rank) if keywords else None
+
             try:
                 results = collect_combined(
                     keywords=keywords,
@@ -186,6 +205,8 @@ with tab1:
                     result_limit=result_limit,
                     region_code=rc,
                     lang_code=lc,
+                    top_n_rank=top_n,
+                    search_order=search_order,
                     callback=cb,
                 )
                 st.session_state.results = results
@@ -402,10 +423,23 @@ if st.session_state.results is not None:
     if not results:
         st.info("수집된 영상이 없습니다. 조건(최소 조회수, 기간)을 조정해 보세요.")
     else:
-        st.caption(f"총 **{len(results)}개** 영상 · 조회수 높은 순 정렬")
+        # 정렬 기준 적용
+        saved_sort = st.session_state.get("col_sort_by", "조회수 기준")
+        if saved_sort == "상위노출 기준":
+            results = sorted(results, key=lambda x: (
+                x["노출순위"] if isinstance(x["노출순위"], int) and x["노출순위"] > 0 else 9999
+            ))
+            sort_label = "상위노출 기준 정렬"
+        else:
+            results = sorted(results, key=lambda x: x["조회수"], reverse=True)
+            sort_label = "조회수 높은 순 정렬"
+
+        st.caption(f"총 **{len(results)}개** 영상 · {sort_label}")
 
         display_df = pd.DataFrame([
             {
+                "검색키워드":    r.get("검색키워드", ""),
+                "노출순위":      r.get("노출순위", "-"),
                 "구분":          r.get("구분", ""),
                 "썸네일":        r.get("썸네일URL", ""),
                 "채널명":        r["채널명"],
@@ -429,7 +463,7 @@ if st.session_state.results is not None:
             },
         )
 
-        fieldnames = ["구분", "채널명", "구독자수", "채널평균조회수", "썸네일", "제목", "조회수", "업로드일자", "URL"]
+        fieldnames = ["검색키워드", "노출순위", "구분", "채널명", "구독자수", "채널평균조회수", "썸네일", "제목", "조회수", "업로드일자", "URL"]
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()

@@ -6,10 +6,16 @@ YouTube 스크립트(자막) 수집 모듈
 
 import re
 import time
+import random
 import requests
-from youtube_transcript_api import YouTubeTranscriptApi
 
-_api = YouTubeTranscriptApi()
+try:
+    from youtube_transcript_api import YouTubeTranscriptApi
+    _api = YouTubeTranscriptApi()
+    _TRANSCRIPT_AVAILABLE = True
+except ImportError:
+    _api = None
+    _TRANSCRIPT_AVAILABLE = False
 
 BASE_URL = "https://www.googleapis.com/youtube/v3"
 
@@ -105,57 +111,67 @@ def get_channel_stats(channel_ids: list, api_key: str):
 # ─────────────────────────────────────────
 # 자막 수집
 # ─────────────────────────────────────────
-def get_transcript(video_id: str, lang_pref: str = "한국어"):
+def get_transcript(video_id: str, lang_pref: str = "한국어", max_retries: int = 3):
     """
     반환: (full_text, lang_used, is_auto, error_msg)
+    블로킹 방지를 위해 재시도 + 지수 백오프 적용
     """
-    try:
-        langs = LANG_PRIORITY.get(lang_pref)
-        tl = _api.list(video_id)
-        transcripts = list(tl)
+    if not _TRANSCRIPT_AVAILABLE:
+        return None, None, None, "youtube-transcript-api 패키지가 설치되지 않았습니다."
 
-        chosen = None
-        lang_used = ""
-        is_auto = False
+    for attempt in range(max_retries):
+        try:
+            langs = LANG_PRIORITY.get(lang_pref)
+            tl = _api.list(video_id)
+            transcripts = list(tl)
 
-        if langs:
-            # 수동 자막 우선
-            for lang in langs:
-                for t in transcripts:
-                    if t.language_code.startswith(lang) and not t.is_generated:
-                        chosen = t
-                        lang_used = t.language_code
-                        is_auto = False
-                        break
-                if chosen:
-                    break
-            # 없으면 자동생성 자막
-            if not chosen:
+            chosen = None
+            lang_used = ""
+            is_auto = False
+
+            if langs:
                 for lang in langs:
                     for t in transcripts:
-                        if t.language_code.startswith(lang) and t.is_generated:
+                        if t.language_code.startswith(lang) and not t.is_generated:
                             chosen = t
                             lang_used = t.language_code
-                            is_auto = True
+                            is_auto = False
                             break
                     if chosen:
                         break
-        else:
-            # 자동감지
-            if transcripts:
-                chosen = transcripts[0]
-                lang_used = chosen.language_code
-                is_auto = chosen.is_generated
+                if not chosen:
+                    for lang in langs:
+                        for t in transcripts:
+                            if t.language_code.startswith(lang) and t.is_generated:
+                                chosen = t
+                                lang_used = t.language_code
+                                is_auto = True
+                                break
+                        if chosen:
+                            break
+            else:
+                if transcripts:
+                    chosen = transcripts[0]
+                    lang_used = chosen.language_code
+                    is_auto = chosen.is_generated
 
-        if not chosen:
-            return None, None, None, "사용 가능한 자막 없음"
+            if not chosen:
+                return None, None, None, "사용 가능한 자막 없음"
 
-        segments = chosen.fetch()
-        full_text = " ".join(s.text.strip() for s in segments if s.text.strip())
-        return full_text, lang_used, is_auto, None
+            segments = chosen.fetch()
+            full_text = " ".join(s.text.strip() for s in segments if s.text.strip())
+            return full_text, lang_used, is_auto, None
 
-    except Exception as e:
-        return None, None, None, str(e)
+        except Exception as e:
+            err_msg = str(e)
+            # 블로킹/레이트리밋 관련 오류면 대기 후 재시도
+            is_blocking = any(k in err_msg.lower() for k in
+                              ["429", "too many", "blocked", "rate", "timeout", "timed out"])
+            if attempt < max_retries - 1 and is_blocking:
+                wait = (2 ** attempt) * 3 + random.uniform(1.0, 3.0)
+                time.sleep(wait)
+                continue
+            return None, None, None, err_msg
 
 
 # ─────────────────────────────────────────
@@ -211,7 +227,8 @@ def collect_transcripts(urls: list, api_key: str, lang_pref: str = "한국어", 
         keywords = ", ".join(tags[:10]) if tags else ""
 
         text, lang, is_auto, err = get_transcript(vid, lang_pref)
-        time.sleep(0.3)
+        # 블로킹 방지: 요청 간 랜덤 딜레이 (1.5~3.5초)
+        time.sleep(random.uniform(1.5, 3.5))
 
         results.append({
             "채널명":         meta.get("channel_name", ""),

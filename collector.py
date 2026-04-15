@@ -379,6 +379,7 @@ def collect_combined(keywords, channel_urls, exclude_urls, min_views, days, api_
             "조회수":        d["views"],
             "업로드일자":    d["upload_date"],
             "URL":           f"https://www.youtube.com/watch?v={vid}",
+            "채널URL":       f"https://www.youtube.com/channel/{cid}",
         })
 
     if callback:
@@ -463,6 +464,7 @@ def collect_by_keywords(keywords, min_views, days, api_key,
             "조회수":        d["views"],
             "업로드일자":    d["upload_date"],
             "URL":           f"https://www.youtube.com/watch?v={vid}",
+            "채널URL":       f"https://www.youtube.com/channel/{cid}",
         })
 
     if callback:

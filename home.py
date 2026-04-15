@@ -658,6 +658,7 @@ if st.session_state.results is not None:
                 "조회수":         f"{r['조회수']:,}",
                 "업로드일자":     r["업로드일자"],
                 "URL":            r["URL"],
+                "채널URL":        r.get("채널URL", ""),
             }
             for r in results
         ])
@@ -669,12 +670,13 @@ if st.session_state.results is not None:
             height=1000,
             row_height=90,
             column_config={
-                "썸네일": st.column_config.ImageColumn("썸네일", width="medium"),
-                "URL":    st.column_config.LinkColumn("URL", display_text="▶ 보기"),
+                "썸네일":  st.column_config.ImageColumn("썸네일", width="medium"),
+                "URL":     st.column_config.LinkColumn("URL", display_text="▶ 보기"),
+                "채널URL": st.column_config.LinkColumn("채널URL", display_text="채널 보기"),
             },
         )
 
-        fieldnames = ["검색키워드", "노출순위", "구분", "채널명", "구독자수", "채널평균조회수", "썸네일", "제목", "조회수", "업로드일자", "URL"]
+        fieldnames = ["검색키워드", "노출순위", "구분", "채널명", "구독자수", "채널평균조회수", "썸네일", "제목", "조회수", "업로드일자", "URL", "채널URL"]
         buf = io.StringIO()
         writer = csv.DictWriter(buf, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()

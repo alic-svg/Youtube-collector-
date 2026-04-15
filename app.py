@@ -127,29 +127,7 @@ with st.sidebar:
 
     st.divider()
 
-    with st.expander("📋 API 키 발급 방법", expanded=False):
-        st.markdown("""
-**1. Google Cloud Console 접속**
-👉 [console.cloud.google.com](https://console.cloud.google.com)
-
-**2. 새 프로젝트 생성**
-상단 프로젝트 선택 → **새 프로젝트** → 이름 입력 → 만들기
-
-**3. YouTube Data API v3 활성화**
-좌측 메뉴 → API 및 서비스 → 라이브러리
-→ **YouTube Data API v3** 검색 → **사용 설정**
-
-**4. API 키 생성**
-API 및 서비스 → **사용자 인증 정보**
-→ 사용자 인증 정보 만들기 → **API 키**
-
-**5. 키 복사 후 위 입력란에 붙여넣기**
-
----
-> 💡 **무료 쿼터**: 하루 10,000 유닛
-> 키워드 검색 1건 ≈ 100 유닛
-> 영상 상세 50건 조회 ≈ 1 유닛
-        """)
+    st.page_link("pages/API_가이드.py", label="📋 API 키 발급 방법 (스크린샷 가이드)", icon="📋", use_container_width=True)
 
     st.divider()
     st.caption("🎬 YouTube 영상 수집기 v1.0")

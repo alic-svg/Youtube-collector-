@@ -21,9 +21,16 @@ cookie = CookieController()
 # ─────────────────────────────────────────
 # 세션 초기화
 # ─────────────────────────────────────────
+# 쿠키 컴포넌트는 JS 비동기 로드 → 첫 렌더링에서 None 반환.
+# 컴포넌트가 로드되면 자동 rerun을 트리거하므로,
+# "api_key_loaded" 플래그를 사용해 로드 완료 후 한 번만 읽는다.
 if "api_key" not in st.session_state:
-    saved = cookie.get("yt_api_key") or ""
-    st.session_state.api_key = saved
+    st.session_state.api_key = ""
+if not st.session_state.get("_api_key_loaded"):
+    saved = cookie.get("yt_api_key")
+    if saved is not None:
+        st.session_state.api_key = saved
+        st.session_state._api_key_loaded = True
 
 if "results" not in st.session_state:
     st.session_state.results = None

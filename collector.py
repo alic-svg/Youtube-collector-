@@ -279,18 +279,23 @@ def get_keyword_volumes(keywords, lang="ko", region="KR"):
         for i in range(0, len(unique_kws), 5):
             batch = unique_kws[i: i + 5]
             try:
+                # gprop="" = 일반 Google 검색 트렌드
+                # gprop="youtube" 는 한국어 키워드에서 데이터가 거의 없어 0 반환
                 pytrend.build_payload(
                     batch,
                     timeframe="today 12-m",
                     geo=region,
-                    gprop="youtube",
+                    gprop="",
                 )
                 data = pytrend.interest_over_time()
+                # isPartial 컬럼 제거 후 평균 계산
+                if "isPartial" in data.columns:
+                    data = data.drop(columns=["isPartial"])
                 if not data.empty:
                     for kw in batch:
                         if kw in data.columns:
-                            avg = int(data[kw].mean())
-                            volumes[kw] = avg if avg > 0 else "<1"
+                            avg = round(data[kw].mean(), 1)
+                            volumes[kw] = int(avg) if avg >= 1 else "<1"
                         else:
                             volumes[kw] = "-"
                 else:

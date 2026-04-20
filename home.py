@@ -336,7 +336,7 @@ with tab2:
             value=False,
             key="ac_show_volume",
             help=(
-                "Google Trends 기반 YouTube 검색관심도(0-100 상대값)를 함께 조회합니다.\n"
+                "Google Trends 기반 검색관심도(0-100 상대값)를 함께 조회합니다.\n"
                 "키워드 수에 따라 추가 시간이 소요됩니다."
             ),
         )
@@ -395,7 +395,7 @@ with tab2:
 
         total_kw  = len(ac_results)
         total_sug = len(all_rows)
-        vol_note  = " · 검색관심도: Google Trends YouTube 상대값(0-100)" if show_vol else ""
+        vol_note  = " · 검색관심도: Google Trends 상대값(0-100)" if show_vol else ""
         st.caption(f"총 **{total_kw}개** 입력 키워드 · **{total_sug}개** 자동완성 키워드{vol_note}")
 
         if all_rows:

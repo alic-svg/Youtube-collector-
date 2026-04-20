@@ -371,12 +371,14 @@ with tab2:
 
             st.session_state.ac_results = ac_results
             st.session_state.ac_volumes = volumes
-            st.session_state.ac_show_volume = show_volume
+            # ac_show_volume 은 체크박스 위젯 키라 직접 쓸 수 없음
+            # → 조회 시점의 값을 별도 키에 저장
+            st.session_state._ac_vol_used = show_volume
 
     if "ac_results" in st.session_state and st.session_state.ac_results:
         ac_results = st.session_state.ac_results
         volumes    = st.session_state.get("ac_volumes", {})
-        show_vol   = st.session_state.get("ac_show_volume", False)
+        show_vol   = st.session_state.get("_ac_vol_used", False)
 
         st.divider()
 

@@ -43,6 +43,7 @@ if "result_label" not in st.session_state:
 with st.sidebar:
     st.title("⚙️ API 설정")
 
+    # ── YouTube Data API 키 ──────────────────
     api_input = st.text_input(
         "YouTube Data API 키",
         value=st.session_state.api_key,

@@ -14,7 +14,7 @@ import requests
 import pandas as pd
 import streamlit as st
 
-from collector import collect_combined, get_autocomplete_bulk
+from collector import collect_combined, get_autocomplete_bulk, QuotaExceededError, get_keyword_volumes
 from transcript import extract_video_id, get_video_metadata, get_channel_stats, build_thumbnail_formula
 
 # ─────────────────────────────────────────
@@ -109,10 +109,6 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-if not st.session_state.api_key:
-    st.warning("👈 왼쪽 사이드바에서 YouTube API 키를 먼저 입력하고 저장해 주세요.")
-    st.stop()
-
 # ─────────────────────────────────────────
 # 탭 구성
 # ─────────────────────────────────────────
@@ -122,6 +118,9 @@ tab1, tab2, tab3 = st.tabs(["🔍 수집", "💡 자동완성 키워드", "📝 
 # 탭 1 - 통합 수집
 # ─────────────────────────────────────────
 with tab1:
+    if not st.session_state.api_key:
+        st.warning("👈 왼쪽 사이드바에서 YouTube API 키를 먼저 입력하고 저장해 주세요.")
+
     st.caption(
         "키워드 검색과 채널 수집을 동시에 사용할 수 있습니다. "
         "키워드만, 채널만, 또는 둘 다 입력해도 동작합니다. "
@@ -232,7 +231,9 @@ with tab1:
         ch_includes = [u.strip() for u in channel_include_input.strip().splitlines() if u.strip()]
         ch_excludes = [u.strip() for u in channel_exclude_input.strip().splitlines() if u.strip()]
 
-        if not keywords and not ch_includes:
+        if not st.session_state.api_key:
+            st.error("YouTube API 키를 먼저 입력하고 저장해 주세요.")
+        elif not keywords and not ch_includes:
             st.error("키워드 또는 수집할 채널 URL 중 하나 이상 입력해 주세요.")
         elif not inc_longform and not inc_shorts:
             st.error("롱폼/숏폼 중 하나 이상 선택해 주세요.")
@@ -289,7 +290,15 @@ with tab1:
                 st.session_state.result_label = f"수집 결과 ({' · '.join(parts)})"
                 prog.progress(1.0)
                 step_text.markdown("**✅ 수집 완료**")
-                msg_text.text(f"총 {len(results)}개 영상이 수집됐습니다.")
+                if len(results) == 0:
+                    msg_text.text("수집된 영상이 없습니다. 조건(최소 조회수, 기간 등)을 완화해 보세요.")
+                else:
+                    msg_text.text(f"총 {len(results)}개 영상이 수집됐습니다.")
+            except QuotaExceededError as e:
+                prog.empty()
+                step_text.empty()
+                msg_text.empty()
+                st.error(f"⚠️ API 쿼터 초과\n\n{e}")
             except Exception as e:
                 st.error(f"오류 발생: {e}")
 
@@ -302,7 +311,7 @@ with tab2:
         "API 키 불필요 · 쿼터 소모 없음. "
         "YouTube 검색창에서 실제로 자동완성되는 키워드를 대량으로 조회합니다. "
         "콘텐츠 기획 시 연관 키워드 발굴에 활용하세요. "
-        "**출력 항목:** 입력 키워드 · 자동완성 키워드"
+        "**출력 항목:** 입력 키워드 · 자동완성 키워드 · YouTube 검색관심도(선택)"
     )
 
     col_left, col_right = st.columns([2, 1])
@@ -322,6 +331,15 @@ with tab2:
             ["🇰🇷 한국 (KR / ko)", "🇯🇵 일본 (JP / ja)", "🌐 영어 (US / en)"],
             key="ac_region",
         )
+        show_volume = st.checkbox(
+            "📊 YouTube 검색량 조회",
+            value=False,
+            key="ac_show_volume",
+            help=(
+                "Google Trends 기반 YouTube 검색관심도(0-100 상대값)를 함께 조회합니다.\n"
+                "키워드 수에 따라 추가 시간이 소요됩니다."
+            ),
+        )
 
     if st.button("🔎 자동완성 조회", key="btn_ac", use_container_width=True, type="primary"):
         keywords = [k.strip() for k in ac_input.strip().splitlines() if k.strip()]
@@ -336,29 +354,58 @@ with tab2:
             region_code, lang_code = region_map[ac_region]
             with st.spinner(f"{len(keywords)}개 키워드 자동완성 조회 중..."):
                 ac_results = get_autocomplete_bulk(keywords, lang=lang_code, region=region_code)
+
+            volumes = {}
+            if show_volume:
+                all_suggestions = list(dict.fromkeys(
+                    sug for item in ac_results for sug in item["자동완성"]
+                ))
+                if all_suggestions:
+                    with st.spinner(
+                        f"YouTube 검색량 조회 중... ({len(all_suggestions)}개 키워드 · "
+                        f"약 {max(1, len(all_suggestions) // 5) * 2}초 소요)"
+                    ):
+                        volumes = get_keyword_volumes(all_suggestions, lang=lang_code, region=region_code)
+                    if not volumes:
+                        st.warning("검색량 데이터를 가져오지 못했습니다. (Google 요청 제한 — 잠시 후 재시도해 주세요.)")
+
             st.session_state.ac_results = ac_results
+            st.session_state.ac_volumes = volumes
+            st.session_state.ac_show_volume = show_volume
 
     if "ac_results" in st.session_state and st.session_state.ac_results:
         ac_results = st.session_state.ac_results
+        volumes    = st.session_state.get("ac_volumes", {})
+        show_vol   = st.session_state.get("ac_show_volume", False)
+
         st.divider()
+
+        # ── 스프레드시트 형태 테이블 구성 ─────────
         all_rows = []
         for item in ac_results:
-            kw = item["키워드"]
+            kw          = item["키워드"]
             suggestions = item["자동완성"]
-            with st.expander(f"**{kw}** — {len(suggestions)}개 자동완성", expanded=True):
-                if suggestions:
-                    cols = st.columns(2)
-                    for idx, sug in enumerate(suggestions):
-                        cols[idx % 2].markdown(f"- {sug}")
-                else:
-                    st.caption("자동완성 결과 없음")
             for sug in suggestions:
-                all_rows.append({"입력 키워드": kw, "자동완성 키워드": sug})
+                row = {"입력 키워드": kw, "자동완성 키워드": sug}
+                if show_vol:
+                    row["검색관심도 (0-100)"] = volumes.get(sug, "-")
+                all_rows.append(row)
+
+        total_kw  = len(ac_results)
+        total_sug = len(all_rows)
+        vol_note  = " · 검색관심도: Google Trends YouTube 상대값(0-100)" if show_vol else ""
+        st.caption(f"총 **{total_kw}개** 입력 키워드 · **{total_sug}개** 자동완성 키워드{vol_note}")
 
         if all_rows:
+            df = pd.DataFrame(all_rows)
+            st.dataframe(df, use_container_width=True, hide_index=True, height=600)
+
             st.divider()
+            csv_fields = ["입력 키워드", "자동완성 키워드"]
+            if show_vol:
+                csv_fields.append("검색관심도 (0-100)")
             buf = io.StringIO()
-            writer = csv.DictWriter(buf, fieldnames=["입력 키워드", "자동완성 키워드"])
+            writer = csv.DictWriter(buf, fieldnames=csv_fields)
             writer.writeheader()
             writer.writerows(all_rows)
             csv_bytes = buf.getvalue().encode("utf-8-sig")
@@ -370,6 +417,8 @@ with tab2:
                 mime="text/csv",
                 use_container_width=True,
             )
+        else:
+            st.info("자동완성 결과가 없습니다.")
 
 # ─────────────────────────────────────────
 # 탭 3 - 스크립트 수집 (로컬 에이전트 연동)

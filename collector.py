@@ -15,16 +15,35 @@ BASE_URL = "https://www.googleapis.com/youtube/v3"
 
 
 # ─────────────────────────────────────────
+# 커스텀 예외
+# ─────────────────────────────────────────
+class QuotaExceededError(Exception):
+    """YouTube Data API 일일 쿼터 초과 오류"""
+    pass
+
+
+# ─────────────────────────────────────────
 # API 공통
 # ─────────────────────────────────────────
+_QUOTA_REASONS = {"quotaExceeded", "dailyLimitExceeded", "userRateLimitExceeded"}
+
 def api_get(endpoint, params, api_key):
     params["key"] = api_key
     try:
         r = requests.get(f"{BASE_URL}/{endpoint}", params=params, timeout=15)
         d = r.json()
         if "error" in d:
-            return None, d["error"].get("message", "알 수 없는 오류")
+            err = d["error"]
+            reasons = {e.get("reason", "") for e in err.get("errors", [])}
+            if reasons & _QUOTA_REASONS:
+                raise QuotaExceededError(
+                    "YouTube API 일일 쿼터가 초과되었습니다. "
+                    "내일(태평양 표준시 자정 기준) 다시 시도하거나 새 API 키를 사용해 주세요."
+                )
+            return None, err.get("message", "알 수 없는 오류")
         return d, None
+    except QuotaExceededError:
+        raise
     except Exception as e:
         return None, str(e)
 
@@ -235,6 +254,56 @@ def get_autocomplete_bulk(keywords, lang="ko", region="KR"):
         results.append({"키워드": kw, "자동완성": suggestions})
         time.sleep(0.2)
     return results
+
+
+def get_keyword_volumes(keywords, lang="ko", region="KR"):
+    """
+    Google Trends YouTube 검색관심도 조회 (0-100 상대값)
+    반환: {keyword: int | "<1" | "-"}
+    pytrends가 설치돼 있지 않거나 요청이 차단되면 빈 dict 반환.
+    """
+    if not keywords:
+        return {}
+    try:
+        from pytrends.request import TrendReq
+    except ImportError:
+        return {}
+
+    unique_kws = list(dict.fromkeys(keywords))  # 중복 제거, 순서 유지
+    volumes = {}
+
+    try:
+        tz_offset = 540 if region in ("KR", "JP") else 0
+        pytrend = TrendReq(hl=lang, tz=tz_offset, timeout=(10, 25), retries=1)
+
+        for i in range(0, len(unique_kws), 5):
+            batch = unique_kws[i: i + 5]
+            try:
+                pytrend.build_payload(
+                    batch,
+                    timeframe="today 12-m",
+                    geo=region,
+                    gprop="youtube",
+                )
+                data = pytrend.interest_over_time()
+                if not data.empty:
+                    for kw in batch:
+                        if kw in data.columns:
+                            avg = int(data[kw].mean())
+                            volumes[kw] = avg if avg > 0 else "<1"
+                        else:
+                            volumes[kw] = "-"
+                else:
+                    for kw in batch:
+                        volumes[kw] = "-"
+            except Exception:
+                for kw in batch:
+                    volumes[kw] = "-"
+            time.sleep(1.5)
+    except Exception:
+        pass
+
+    return volumes
 
 
 # ─────────────────────────────────────────

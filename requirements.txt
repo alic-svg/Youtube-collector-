@@ -4,3 +4,4 @@ extra-streamlit-components>=0.1.60
 streamlit-cookies-controller>=0.0.4
 pandas>=2.0.0
 youtube-transcript-api>=0.6.0
+pytrends>=4.9.0

@@ -122,8 +122,9 @@ with tab1:
         st.warning("👈 왼쪽 사이드바에서 YouTube API 키를 먼저 입력하고 저장해 주세요.")
 
     st.caption(
-        "키워드 검색과 채널 수집을 동시에 사용할 수 있습니다. "
-        "키워드만, 채널만, 또는 둘 다 입력해도 동작합니다. "
+        "**키워드 + 채널 URL 동시 입력 시:** 해당 채널 안에서만 키워드를 검색합니다. "
+        "**키워드만 입력 시:** 전체 YouTube에서 검색합니다. "
+        "**채널만 입력 시:** 채널의 전체 영상을 수집합니다.  "
         "**출력 항목:** 검색키워드 · 노출순위 · 구분(롱폼/숏폼) · 채널명 · 구독자수 · "
         "채널평균조회수 · 썸네일 · 제목 · 조회수 · 업로드일자 · URL"
     )
@@ -246,8 +247,12 @@ with tab1:
             rc, lc = region_map[region]
 
             parts = []
-            if keywords:   parts.append(f"키워드 {len(keywords)}개")
-            if ch_includes: parts.append(f"채널 {len(ch_includes)}개")
+            if keywords and ch_includes:
+                parts.append(f"채널 내 키워드 검색 ({len(ch_includes)}개 채널 × {len(keywords)}개 키워드)")
+            elif keywords:
+                parts.append(f"키워드 {len(keywords)}개")
+            if ch_includes and not keywords:
+                parts.append(f"채널 {len(ch_includes)}개")
             if ch_excludes: parts.append(f"제외 {len(ch_excludes)}개")
             form_label = "롱폼+숏폼" if inc_longform and inc_shorts else ("롱폼만" if inc_longform else "숏폼만")
             search_order = "relevance" if sort_by == "상위노출 기준" else "viewCount"

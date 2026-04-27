@@ -103,7 +103,8 @@ def build_thumbnail_formula(video_id):
 # YouTube API 요청
 # ─────────────────────────────────────────
 def search_videos(keyword, pub_after, api_key, max_results=50,
-                  region_code="KR", lang_code="ko", order="relevance"):
+                  region_code="KR", lang_code="ko", order="relevance",
+                  channel_id=None):
     ids, page_token = [], None
     while len(ids) < max_results:
         params = {
@@ -116,6 +117,8 @@ def search_videos(keyword, pub_after, api_key, max_results=50,
             params["regionCode"] = region_code
         if lang_code:
             params["relevanceLanguage"] = lang_code
+        if channel_id:
+            params["channelId"] = channel_id
         if page_token:
             params["pageToken"] = page_token
 
@@ -337,8 +340,11 @@ def collect_combined(keywords, channel_urls, exclude_urls, min_views, days, api_
     total_steps = sum([bool(keywords), bool(channel_urls)])
     step = 0
 
-    # ── 1. 키워드 검색 ──────────────────────
-    if keywords:
+    # 채널 + 키워드 동시 입력 → 채널 전체 수집 후 키워드 제목 필터 모드
+    channel_scoped = bool(keywords and channel_urls)
+
+    # ── 1. 키워드 전체 검색 (채널 미지정일 때만) ──
+    if keywords and not channel_scoped:
         total_kw = len(keywords)
         for i, kw in enumerate(keywords):
             if callback:
@@ -347,10 +353,8 @@ def collect_combined(keywords, channel_urls, exclude_urls, min_views, days, api_
             ids = search_videos(kw, pub_after, api_key, 50, region_code, lang_code,
                                 order=search_order)
             for rank, vid in enumerate(ids, 1):
-                # 상위노출 필터
                 if top_n_rank and rank > top_n_rank:
                     continue
-                # 여러 키워드에 중복 시 순위 높은(숫자 낮은) 것 유지
                 if vid not in keyword_rank_map or rank < keyword_rank_map[vid][1]:
                     keyword_rank_map[vid] = (kw, rank)
                 all_ids.add(vid)
@@ -360,7 +364,7 @@ def collect_combined(keywords, channel_urls, exclude_urls, min_views, days, api_
             callback(step / max(total_steps, 1) * 0.3,
                      "키워드 검색", f"완료 · {len(all_ids)}개 ID 수집")
 
-    # ── 2. 채널 수집 ────────────────────────
+    # ── 2. 채널 수집 (채널만 입력 OR 채널+키워드 모두) ──
     if channel_urls:
         handles = parse_channel_urls(channel_urls)
         channels = {}
@@ -414,6 +418,18 @@ def collect_combined(keywords, channel_urls, exclude_urls, min_views, days, api_
         callback(0.84, "필터링", "조건 적용 중...")
 
     ch_video_ids = {v for ids in channel_video_map.values() for v in ids}
+
+    # 채널+키워드 모드: 채널 영상 중 제목·태그에 키워드가 포함된 것만 통과
+    def matched_keyword(d) -> str:
+        """제목·태그에 매칭되는 첫 번째 키워드 반환. 없으면 빈 문자열."""
+        if not channel_scoped or not keywords:
+            return ""
+        text = (d["title"] + " " + " ".join(d.get("tags", []))).lower()
+        for kw in keywords:
+            if kw.lower() in text:
+                return kw
+        return None  # None = 매칭 없음 → 제외
+
     passed = []
     for vid, d in details.items():
         if d["channel_id"] in exclude_ids:
@@ -427,7 +443,16 @@ def collect_combined(keywords, channel_urls, exclude_urls, min_views, days, api_
             continue
         if d["views"] < min_views:
             continue
-        kw, rank = keyword_rank_map.get(vid, ("", 0))
+
+        # 채널+키워드 모드: 키워드 제목 매칭 확인
+        if channel_scoped:
+            hit_kw = matched_keyword(d)
+            if hit_kw is None:
+                continue  # 키워드 미매칭 → 제외
+            kw, rank = hit_kw, 0
+        else:
+            kw, rank = keyword_rank_map.get(vid, ("", 0))
+
         passed.append({"video_id": vid, "is_short": short,
                        "검색키워드": kw, "노출순위": rank, **d})
 

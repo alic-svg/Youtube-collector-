@@ -331,24 +331,65 @@ def collect_combined(keywords, channel_urls, exclude_urls, min_views, days, api_
     - search_order:  "relevance" | "viewCount"
     """
     pub_after = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
-    all_ids = set()
-    include_ch_stats = {}
-    channel_video_map = {}
-    # {video_id: (keyword, rank)} — 여러 키워드 중 최고 순위(낮은 숫자) 기록
-    keyword_rank_map = {}
 
-    total_steps = sum([bool(keywords), bool(channel_urls)])
-    step = 0
-
-    # 채널 + 키워드 동시 입력 → 채널 전체 수집 후 키워드 제목 필터 모드
+    # ══════════════════════════════════════════════════════════
+    # 모드 분기
+    #  A) 채널 + 키워드 → 채널 전체 수집 후 제목/태그 키워드 필터
+    #  B) 키워드만      → YouTube 전체 키워드 검색
+    #  C) 채널만        → 채널 전체 영상 수집 (키워드 필터 없음)
+    # ══════════════════════════════════════════════════════════
     channel_scoped = bool(keywords and channel_urls)
 
-    # ── 1. 키워드 전체 검색 (채널 미지정일 때만) ──
+    include_ch_stats = {}
+    channel_video_map = {}
+    keyword_rank_map = {}   # B 모드 전용: {video_id: (kw, rank)}
+    all_ids = set()
+
+    # ── 제외 채널 ID 먼저 확인 ───────────────────────────────
+    exclude_ids = set()
+    if exclude_urls:
+        exclude_handles = parse_channel_urls(exclude_urls)
+        if callback:
+            callback(0.05, "제외 채널 확인", f"{len(exclude_handles)}개 채널 ID 조회 중...")
+        for handle in exclude_handles:
+            info, _ = get_channel_info(handle, api_key)
+            if info:
+                exclude_ids.add(info["channel_id"])
+            time.sleep(0.2)
+
+    # ── 모드 A / C: 채널 전체 영상 수집 ─────────────────────
+    if channel_urls:
+        handles = parse_channel_urls(channel_urls)
+        channels = {}
+        total_ch = len(handles)
+        for i, handle in enumerate(handles):
+            if callback:
+                callback(0.10 + i / max(total_ch, 1) * 0.15,
+                         "채널 정보 수집", f"@{handle} 수집 중... ({i+1}/{total_ch})")
+            info, err = get_channel_info(handle, api_key)
+            if info:
+                channels[info["channel_id"]] = info
+            time.sleep(0.3)
+
+        for i, (cid, info) in enumerate(channels.items()):
+            if callback:
+                callback(0.25 + i / max(len(channels), 1) * 0.25,
+                         "채널 영상 목록 수집", f"{info['channel_name']} 영상 목록 수집 중...")
+            ids = get_all_video_ids(info["uploads_pl"], api_key)
+            channel_video_map[cid] = ids
+            all_ids.update(ids)
+            include_ch_stats[cid] = {"subscribers": info["subscribers"], "avg_views": info["avg_views"]}
+            time.sleep(0.3)
+
+        if callback:
+            callback(0.50, "채널 수집 완료", f"총 {len(all_ids)}개 영상 ID 수집")
+
+    # ── 모드 B: YouTube 전체 키워드 검색 (채널 미지정일 때만) ─
     if keywords and not channel_scoped:
         total_kw = len(keywords)
         for i, kw in enumerate(keywords):
             if callback:
-                callback(step / max(total_steps, 1) * 0.3 + i / total_kw * 0.3,
+                callback(0.10 + i / total_kw * 0.40,
                          "키워드 검색", f"'{kw}' 검색 중... ({i+1}/{total_kw})")
             ids = search_videos(kw, pub_after, api_key, 50, region_code, lang_code,
                                 order=search_order)
@@ -359,102 +400,58 @@ def collect_combined(keywords, channel_urls, exclude_urls, min_views, days, api_
                     keyword_rank_map[vid] = (kw, rank)
                 all_ids.add(vid)
             time.sleep(0.4)
-        step += 1
         if callback:
-            callback(step / max(total_steps, 1) * 0.3,
-                     "키워드 검색", f"완료 · {len(all_ids)}개 ID 수집")
+            callback(0.50, "키워드 검색 완료", f"총 {len(all_ids)}개 ID 수집")
 
-    # ── 2. 채널 수집 (채널만 입력 OR 채널+키워드 모두) ──
-    if channel_urls:
-        handles = parse_channel_urls(channel_urls)
-        channels = {}
-        total_ch = len(handles)
-        for i, handle in enumerate(handles):
-            if callback:
-                callback(step / max(total_steps, 1) * 0.3 + i / max(total_ch, 1) * 0.15,
-                         "채널 정보 수집", f"@{handle} 수집 중... ({i+1}/{total_ch})")
-            info, err = get_channel_info(handle, api_key)
-            if info:
-                channels[info["channel_id"]] = info
-            time.sleep(0.3)
-
-        for i, (cid, info) in enumerate(channels.items()):
-            if callback:
-                callback(step / max(total_steps, 1) * 0.3 + 0.15 + i / max(len(channels), 1) * 0.1,
-                         "채널 영상 목록 수집", f"{info['channel_name']} 영상 목록 수집 중...")
-            ids = get_all_video_ids(info["uploads_pl"], api_key)
-            channel_video_map[cid] = ids
-            all_ids.update(ids)
-            include_ch_stats[cid] = {"subscribers": info["subscribers"], "avg_views": info["avg_views"]}
-            time.sleep(0.3)
-        step += 1
-
-    # ── 3. 제외 채널 ID 확인 ─────────────────
-    exclude_ids = set()
-    if exclude_urls:
-        exclude_handles = parse_channel_urls(exclude_urls)
-        if callback:
-            callback(0.55, "제외 채널 확인", f"{len(exclude_handles)}개 채널 ID 조회 중...")
-        for handle in exclude_handles:
-            info, _ = get_channel_info(handle, api_key)
-            if info:
-                exclude_ids.add(info["channel_id"])
-            time.sleep(0.2)
-
-    # ── 4. 영상 상세 정보 ────────────────────
+    # ── 영상 상세 정보 수집 ──────────────────────────────────
     id_list = list(all_ids)
     if callback:
-        callback(0.58, "영상 정보 수집", f"총 {len(id_list)}개 영상 정보 수집 중...")
+        callback(0.52, "영상 정보 수집", f"총 {len(id_list)}개 영상 정보 수집 중...")
 
     def detail_cb(done, total):
         if callback:
-            callback(0.58 + done / max(total, 1) * 0.25,
+            callback(0.52 + done / max(total, 1) * 0.30,
                      "영상 정보 수집", f"({done}/{total})")
 
     details = get_video_details(id_list, api_key, callback=detail_cb)
 
-    # ── 5. 필터링 ────────────────────────────
+    # ── 필터링 ───────────────────────────────────────────────
     if callback:
-        callback(0.84, "필터링", "조건 적용 중...")
+        callback(0.83, "필터링", "조건 적용 중...")
 
     ch_video_ids = {v for ids in channel_video_map.values() for v in ids}
 
-    # 채널+키워드 모드: 채널 영상 중 제목·태그에 키워드가 포함된 것만 통과
-    def matched_keyword(d) -> str:
-        """제목·태그에 매칭되는 첫 번째 키워드 반환. 없으면 빈 문자열."""
-        if not channel_scoped or not keywords:
-            return ""
-        text = (d["title"] + " " + " ".join(d.get("tags", []))).lower()
-        for kw in keywords:
-            if kw.lower() in text:
-                return kw
-        return None  # None = 매칭 없음 → 제외
-
     passed = []
     for vid, d in details.items():
+        # 제외 채널
         if d["channel_id"] in exclude_ids:
             continue
+        # 기간 필터 (채널 영상에만 적용)
         if vid in ch_video_ids and d["upload_date"] < pub_after[:10]:
             continue
+        # 롱폼/숏폼
         short = is_short(d["duration_sec"], d["title"], d["tags"])
         if short and not include_shorts:
             continue
         if not short and not include_longform:
             continue
+        # 최소 조회수
         if d["views"] < min_views:
             continue
 
-        # 채널+키워드 모드: 키워드 제목 매칭 확인
+        # 모드 A: 채널 영상 중 키워드가 제목·태그에 포함된 것만 통과
         if channel_scoped:
-            hit_kw = matched_keyword(d)
+            text = (d["title"] + " " + " ".join(d.get("tags", []))).lower()
+            hit_kw = next((kw for kw in keywords if kw.lower() in text), None)
             if hit_kw is None:
-                continue  # 키워드 미매칭 → 제외
-            kw, rank = hit_kw, 0
+                continue
+            row_kw, row_rank = hit_kw, 0
+        # 모드 B: 키워드 검색 결과
         else:
-            kw, rank = keyword_rank_map.get(vid, ("", 0))
+            row_kw, row_rank = keyword_rank_map.get(vid, ("", 0))
 
         passed.append({"video_id": vid, "is_short": short,
-                       "검색키워드": kw, "노출순위": rank, **d})
+                       "검색키워드": row_kw, "노출순위": row_rank, **d})
 
     # ── 6. 채널 통계 ─────────────────────────
     kw_channel_ids = {d["channel_id"] for d in passed} - set(include_ch_stats.keys())

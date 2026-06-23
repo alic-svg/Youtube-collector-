@@ -5,16 +5,45 @@ YouTube 스크립트(자막) 수집 모듈
 - 프록시 로테이션으로 클라우드 IP 차단 우회
 """
 
+import json
 import re
 import time
 import random
+import os
 import requests
+from pathlib import Path
 
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
     _TRANSCRIPT_AVAILABLE = True
 except ImportError:
     _TRANSCRIPT_AVAILABLE = False
+
+# cookies.json 위치: 이 파일과 같은 폴더의 agent/ 하위
+_COOKIES_FILE = Path(__file__).parent / "agent" / "cookies.json"
+
+
+def _build_http_client() -> requests.Session:
+    """agent/cookies.json을 읽어 requests.Session 반환."""
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/125.0.0.0 Safari/537.36",
+    })
+    if not _COOKIES_FILE.exists():
+        return session
+    try:
+        with open(_COOKIES_FILE, encoding="utf-8") as f:
+            for c in json.load(f):
+                session.cookies.set(
+                    c["name"], c["value"],
+                    domain=c.get("domain", ".youtube.com"),
+                    path=c.get("path", "/"),
+                )
+    except Exception:
+        pass
+    return session
 
 BASE_URL = "https://www.googleapis.com/youtube/v3"
 
@@ -44,22 +73,29 @@ def build_thumbnail_formula(video_id):
     return f'=IFERROR(IMAGE("https://i.ytimg.com/vi/{video_id}/mqdefault.jpg","",0),"")'
 
 
-def _make_api(proxy_url: str = None):
-    """프록시 URL로 API 인스턴스 생성. 실패 시 직접 연결로 폴백."""
+def _make_api(proxy_url: str = None, http_client: requests.Session = None):
+    """프록시/쿠키 세션으로 API 인스턴스 생성."""
     if not _TRANSCRIPT_AVAILABLE:
         return None
+
+    kwargs = {}
+    if http_client:
+        kwargs["http_client"] = http_client
+
     if proxy_url:
         try:
             from youtube_transcript_api.proxies import GenericProxyConfig
-            return YouTubeTranscriptApi(
-                proxy_config=GenericProxyConfig(
-                    http_proxy=proxy_url,
-                    https_proxy=proxy_url,
-                )
+            kwargs["proxy_config"] = GenericProxyConfig(
+                http_proxy=proxy_url,
+                https_proxy=proxy_url,
             )
         except Exception:
             pass
-    return YouTubeTranscriptApi()
+
+    try:
+        return YouTubeTranscriptApi(**kwargs)
+    except Exception:
+        return YouTubeTranscriptApi()
 
 
 # ─────────────────────────────────────────
@@ -126,27 +162,28 @@ def get_channel_stats(channel_ids: list, api_key: str):
 # ─────────────────────────────────────────
 # 자막 수집 (프록시 로테이션)
 # ─────────────────────────────────────────
-def get_transcript(video_id: str, lang_pref: str = "한국어", proxy_list: list = None):
+def get_transcript(video_id: str, lang_pref: str = "한국어",
+                   proxy_list: list = None, http_client: requests.Session = None):
     """
     반환: (full_text, lang_used, is_auto, error_msg)
-    proxy_list 가 있으면 랜덤 순서로 순회하며 차단 시 다음 프록시 시도.
-    모든 프록시 소진 후 직접 연결도 시도.
+    http_client: 쿠키가 담긴 requests.Session (없으면 자동으로 cookies.json 로드)
+    proxy_list: ["http://user:pass@ip:port", ...] 형식의 프록시 목록
     """
     if not _TRANSCRIPT_AVAILABLE:
         return None, None, None, "youtube-transcript-api 패키지가 설치되지 않았습니다."
 
-    # 시도 순서: 프록시 랜덤 섞기 → 마지막에 직접 연결(None) 추가
-    proxies_to_try = []
+    client = http_client or _build_http_client()
+
+    proxies_to_try = [None]
     if proxy_list:
         shuffled = list(proxy_list)
         random.shuffle(shuffled)
-        proxies_to_try.extend(shuffled)
-    proxies_to_try.append(None)
+        proxies_to_try = shuffled + [None]
 
     last_err = "알 수 없는 오류"
 
     for proxy_url in proxies_to_try:
-        api = _make_api(proxy_url)
+        api = _make_api(proxy_url, client)
         if not api:
             continue
         try:
@@ -159,7 +196,6 @@ def get_transcript(video_id: str, lang_pref: str = "한국어", proxy_list: list
             is_auto = False
 
             if langs:
-                # 수동 자막 우선
                 for lang in langs:
                     for t in transcripts:
                         if t.language_code.startswith(lang) and not t.is_generated:
@@ -169,7 +205,6 @@ def get_transcript(video_id: str, lang_pref: str = "한국어", proxy_list: list
                             break
                     if chosen:
                         break
-                # 없으면 자동생성 자막
                 if not chosen:
                     for lang in langs:
                         for t in transcripts:
@@ -198,14 +233,12 @@ def get_transcript(video_id: str, lang_pref: str = "한국어", proxy_list: list
             is_blocking = any(k in last_err.lower() for k in
                               ["blocked", "429", "too many", "rate",
                                "ipblocked", "requestblocked", "cloud"])
-            if is_blocking:
-                # 차단이면 다음 프록시 시도 (짧은 대기)
+            if is_blocking and proxy_url:
                 time.sleep(random.uniform(0.5, 1.5))
                 continue
-            # 차단 외 오류(자막 없음 등)는 즉시 반환
             return None, None, None, last_err
 
-    return None, None, None, f"모든 프록시에서 차단됨 — {last_err}"
+    return None, None, None, f"모든 시도 실패 — {last_err}"
 
 
 # ─────────────────────────────────────────
@@ -213,11 +246,9 @@ def get_transcript(video_id: str, lang_pref: str = "한국어", proxy_list: list
 # ─────────────────────────────────────────
 def collect_transcripts(urls: list, api_key: str, lang_pref: str = "한국어",
                         proxy_list: list = None, callback=None):
-    """
-    URL 목록 → 메타데이터 + 스크립트 수집
-    proxy_list: ["http://user:pass@ip:port", ...] 형식의 프록시 목록
-    """
+    """URL 목록 → 메타데이터 + 스크립트 수집. 쿠키는 agent/cookies.json에서 자동 로드."""
     total = len(urls)
+    http_client = _build_http_client()
 
     # 1. 영상 ID 추출
     url_id_map = {}
@@ -237,7 +268,7 @@ def collect_transcripts(urls: list, api_key: str, lang_pref: str = "한국어",
     channel_ids = list({m["channel_id"] for m in metadata.values() if "channel_id" in m})
     ch_stats = get_channel_stats(channel_ids, api_key) if api_key and channel_ids else {}
 
-    # 4. 자막 수집 (프록시 로테이션)
+    # 4. 자막 수집
     results = []
     for i, url in enumerate(urls):
         if callback:
@@ -260,10 +291,11 @@ def collect_transcripts(urls: list, api_key: str, lang_pref: str = "한국어",
         tags     = meta.get("tags", [])
         keywords = ", ".join(tags[:10]) if tags else ""
 
-        text, lang, is_auto, err = get_transcript(vid, lang_pref, proxy_list=proxy_list)
+        text, lang, is_auto, err = get_transcript(
+            vid, lang_pref, proxy_list=proxy_list, http_client=http_client
+        )
 
-        # 요청 간 딜레이 (프록시 있으면 짧게, 없으면 길게)
-        time.sleep(random.uniform(0.8, 1.8) if proxy_list else random.uniform(2.0, 4.0))
+        time.sleep(random.uniform(2.0, 5.0))
 
         results.append({
             "채널명":           meta.get("channel_name", ""),

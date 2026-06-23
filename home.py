@@ -4,18 +4,14 @@ YouTube 영상 수집기 - 메인 페이지 콘텐츠
 
 import csv
 import io
-import json
 import os
-import uuid
-import time
 from datetime import datetime, timedelta, date
 
-import requests
 import pandas as pd
 import streamlit as st
 
 from collector import collect_combined, get_autocomplete_bulk, QuotaExceededError, get_keyword_volumes
-from transcript import extract_video_id, get_video_metadata, get_channel_stats, build_thumbnail_formula
+from transcript import extract_video_id, get_video_metadata, get_channel_stats, build_thumbnail_formula, collect_transcripts
 
 # ─────────────────────────────────────────
 # 유틸
@@ -23,45 +19,6 @@ from transcript import extract_video_id, get_video_metadata, get_channel_stats, 
 def man_to_views(man_value: float) -> int:
     return int(man_value * 10_000)
 
-
-# ─────────────────────────────────────────
-# Upstash Redis 헬퍼 (로컬 에이전트 연동)
-# ─────────────────────────────────────────
-def _upstash_cfg():
-    """Secrets에서 Upstash 설정 읽기. 없으면 None."""
-    try:
-        u = st.secrets.get("upstash", {})
-        url   = u.get("rest_url", "").rstrip("/")
-        token = u.get("rest_token", "")
-        if url and token:
-            return {"url": url, "token": token}
-    except Exception:
-        pass
-    return None
-
-def _redis(cfg, *args):
-    """Redis 명령 실행. 실패 시 None."""
-    try:
-        r = requests.post(
-            cfg["url"],
-            headers={"Authorization": f"Bearer {cfg['token']}",
-                     "Content-Type": "application/json"},
-            json=list(args),
-            timeout=10,
-        )
-        return r.json().get("result")
-    except Exception:
-        return None
-
-def _agent_online(cfg) -> bool:
-    """에이전트 하트비트 확인 (30초 이내 갱신 여부)."""
-    val = _redis(cfg, "GET", "yt_agent_heartbeat")
-    if not val:
-        return False
-    try:
-        return (time.time() - int(val)) <= 30
-    except Exception:
-        return False
 
 def views_to_man(views: int) -> str:
     v = views / 10_000
@@ -428,7 +385,7 @@ with tab2:
             st.info("자동완성 결과가 없습니다.")
 
 # ─────────────────────────────────────────
-# 탭 3 - 스크립트 수집 (로컬 에이전트 연동)
+# 탭 3 - 스크립트 수집 (직접 수집)
 # ─────────────────────────────────────────
 with tab3:
     st.subheader("영상 스크립트 수집")
@@ -438,53 +395,6 @@ with tab3:
         "자막이 비활성화된 영상은 수집 불가. "
         "**출력 항목:** 채널명 · 구독자수 · 채널평균조회수 · 썸네일 · 제목 · 조회수 · 업로드일자 · URL · 스크립트 · 핵심키워드(태그)"
     )
-
-    # ── 사용 방법 + 에이전트 다운로드 ─────────
-    with st.expander("📖 사용 방법 — 처음이라면 먼저 읽어주세요", expanded=False):
-        st.markdown("스크립트 수집은 **로컬 에이전트 프로그램**이 필요합니다. YouTube가 서버 IP를 차단하기 때문에 개인 PC에서 직접 수집합니다.")
-        st.markdown("**① 에이전트 설치파일 다운로드**")
-
-        _zip_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "agent", "YT_Script_Agent_release.zip")
-        if os.path.exists(_zip_path):
-            with open(_zip_path, "rb") as _f:
-                st.download_button(
-                    label="⬇️ 에이전트 다운로드 (Windows)",
-                    data=_f.read(),
-                    file_name="YT_Script_Agent.zip",
-                    mime="application/zip",
-                    type="primary",
-                )
-        else:
-            st.caption("설치파일이 아직 준비되지 않았습니다. 관리자에게 문의해 주세요.")
-
-        st.markdown("""
-**② 압축 해제 후 `YT_Script_Agent.exe` 실행**
-> Windows 보안 경고 → **추가 정보** 클릭 → **실행** 클릭
-
-**③ 터미널 창에 아래 메시지가 보이면 준비 완료**
-```
-Waiting for jobs... (Ctrl+C to stop)
-```
-
-**④ 에이전트 창을 닫지 않은 채로** 이 페이지에서 URL 입력 후 수집 시작
-
-**⑤ 수집이 끝나면 결과가 자동으로 화면에 표시됩니다**
-
-> 에이전트는 수집할 때만 켜두면 됩니다. 평소에는 닫아도 됩니다.
-""")
-
-    # ── 에이전트 상태 표시 ──────────────────
-    upstash_cfg = _upstash_cfg()
-    if not upstash_cfg:
-        st.error("스크립트 수집 서비스에 연결할 수 없습니다. 관리자에게 문의해 주세요.")
-    else:
-        online = _agent_online(upstash_cfg)
-        if online:
-            st.success("🟢 로컬 에이전트 연결됨 — 수집 준비 완료")
-        else:
-            st.warning("🔴 로컬 에이전트 오프라인 — 에이전트를 먼저 실행해 주세요.")
-
-    st.divider()
 
     col_left, col_right = st.columns([2, 1])
 
@@ -516,94 +426,28 @@ Waiting for jobs... (Ctrl+C to stop)
         </small>
         """, unsafe_allow_html=True)
 
-    # ── 수집 시작 버튼 ──────────────────────
     if st.button("📝 스크립트 수집 시작", key="btn_script",
-                 use_container_width=True, type="primary",
-                 disabled=(not upstash_cfg)):
+                 use_container_width=True, type="primary"):
         urls = [u.strip() for u in script_urls_input.strip().splitlines() if u.strip()]
         if not urls:
             st.error("영상 URL을 한 줄에 하나씩 입력해 주세요.")
-        elif not _agent_online(upstash_cfg):
-            st.error("로컬 에이전트가 실행 중이지 않습니다. 에이전트를 먼저 실행해 주세요.")
         else:
-            # 영상 ID 추출
-            url_id_map = {u: extract_video_id(u) for u in urls}
-            valid_ids  = [vid for vid in url_id_map.values() if vid]
+            prog     = st.progress(0)
+            msg_text = st.empty()
 
-            # 메타데이터 수집 (클라우드에서 처리)
-            with st.spinner("영상 정보 조회 중..."):
-                api_key  = st.session_state.api_key
-                metadata = get_video_metadata(valid_ids, api_key) if api_key else {}
-                ch_ids   = list({m["channel_id"] for m in metadata.values() if "channel_id" in m})
-                ch_stats = get_channel_stats(ch_ids, api_key) if api_key and ch_ids else {}
+            def script_cb(progress, message):
+                prog.progress(min(progress, 1.0))
+                msg_text.text(message)
 
-            # Redis에 작업 제출
-            job_id = str(uuid.uuid4())
-            job_payload = json.dumps({
-                "job_id":    job_id,
-                "video_ids": valid_ids,
-                "lang_pref": script_lang,
-            }, ensure_ascii=False)
-            _redis(upstash_cfg, "RPUSH", "yt_jobs", job_payload)
-
-            # 세션에 작업 정보 저장
-            st.session_state.script_job = {
-                "job_id":    job_id,
-                "urls":      urls,
-                "url_id_map": url_id_map,
-                "metadata":  metadata,
-                "ch_stats":  ch_stats,
-            }
-            st.session_state.pop("script_results", None)
-            st.rerun()
-
-    # ── 결과 대기 / 표시 ────────────────────
-    if "script_job" in st.session_state and upstash_cfg:
-        job_info = st.session_state.script_job
-        job_id   = job_info["job_id"]
-
-        raw = _redis(upstash_cfg, "GET", f"yt_result:{job_id}")
-        if raw:
-            # 결과 도착 → 파싱 후 세션에 저장
-            try:
-                data = json.loads(raw)
-                transcripts = data.get("transcripts", {})
-            except Exception:
-                transcripts = {}
-
-            # 메타데이터 + 자막 병합
-            merged = []
-            for url in job_info["urls"]:
-                vid  = job_info["url_id_map"].get(url)
-                meta = job_info["metadata"].get(vid, {}) if vid else {}
-                cid  = meta.get("channel_id", "")
-                ch   = job_info["ch_stats"].get(cid, {"subscribers": 0, "avg_views": 0})
-                tags = meta.get("tags", [])
-                tr   = transcripts.get(vid, {}) if vid else {}
-                merged.append({
-                    "채널명":           meta.get("channel_name", ""),
-                    "구독자수":         ch["subscribers"],
-                    "채널평균조회수":   ch["avg_views"],
-                    "썸네일URL":        f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg" if vid else "",
-                    "제목":             meta.get("title", url),
-                    "조회수":           meta.get("views", 0),
-                    "업로드일자":       meta.get("upload_date", ""),
-                    "URL":              url,
-                    "스크립트":         tr.get("text", ""),
-                    "핵심키워드(태그)": ", ".join(tags[:10]),
-                    "_오류":            tr.get("error", "") or ("유효하지 않은 URL" if not vid else ""),
-                })
-
-            st.session_state.script_results = merged
-            del st.session_state.script_job
-            st.rerun()
-
-        else:
-            # 아직 처리 중
-            total_vids = len([v for v in job_info["url_id_map"].values() if v])
-            st.info(f"⏳ 로컬 에이전트가 처리 중입니다... ({total_vids}개 영상)")
-            st.caption("영상 1개당 약 2~4초 소요됩니다. 이 페이지를 닫지 마세요.")
-            time.sleep(3)
+            results = collect_transcripts(
+                urls=urls,
+                api_key=st.session_state.api_key,
+                lang_pref=script_lang,
+                callback=script_cb,
+            )
+            st.session_state.script_results = results
+            prog.progress(1.0)
+            msg_text.empty()
             st.rerun()
 
     if "script_results" in st.session_state and st.session_state.script_results:

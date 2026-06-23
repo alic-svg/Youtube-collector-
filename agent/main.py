@@ -35,6 +35,8 @@ LANG_PRIORITY = {
     "자동감지": None,
 }
 
+COOKIES_FILE = BASE_DIR / "cookies.json"
+
 POLL_INTERVAL   = 3   # 작업 폴링 간격 (초)
 HEARTBEAT_TTL   = 30  # Redis 하트비트 만료 (초)
 HEARTBEAT_EVERY = 10  # 하트비트 갱신 주기 (초)
@@ -77,6 +79,34 @@ def setup_config():
 
 
 # ─────────────────────────────────────────
+# YouTube 쿠키 세션 로드
+# ─────────────────────────────────────────
+def build_http_client() -> requests.Session:
+    """cookies.json을 읽어 requests.Session을 반환. 파일 없으면 빈 세션."""
+    session = requests.Session()
+    session.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+    })
+    if not COOKIES_FILE.exists():
+        print("  [경고] cookies.json 없음 — 쿠키 없이 시도합니다.")
+        return session
+    try:
+        with open(COOKIES_FILE, encoding="utf-8") as f:
+            cookie_list = json.load(f)
+        for c in cookie_list:
+            session.cookies.set(
+                c["name"],
+                c["value"],
+                domain=c.get("domain", ".youtube.com"),
+                path=c.get("path", "/"),
+            )
+        print(f"  ✅ 쿠키 {len(cookie_list)}개 로드됨")
+    except Exception as e:
+        print(f"  [경고] 쿠키 로드 실패: {e}")
+    return session
+
+
+# ─────────────────────────────────────────
 # Upstash Redis REST API
 # ─────────────────────────────────────────
 def redis_cmd(cfg, *args):
@@ -111,12 +141,12 @@ def redis_set(cfg, key, value_str, ex=None):
 # ─────────────────────────────────────────
 # 자막 수집
 # ─────────────────────────────────────────
-def fetch_transcript(video_id: str, lang_pref: str = "한국어") -> dict:
+def fetch_transcript(video_id: str, lang_pref: str = "한국어", http_client: requests.Session = None) -> dict:
     """
     반환: {"text": str, "lang": str, "is_auto": bool, "error": str|None}
     """
     try:
-        api = YouTubeTranscriptApi()
+        api = YouTubeTranscriptApi(http_client=http_client)
         langs = LANG_PRIORITY.get(lang_pref)
         tl = api.list(video_id)
         transcripts = list(tl)
@@ -163,7 +193,7 @@ def fetch_transcript(video_id: str, lang_pref: str = "한국어") -> dict:
 # ─────────────────────────────────────────
 # 작업 처리
 # ─────────────────────────────────────────
-def process_job(cfg, job: dict):
+def process_job(cfg, job: dict, http_client: requests.Session = None):
     job_id    = job.get("job_id", "unknown")
     video_ids = job.get("video_ids", [])
     lang_pref = job.get("lang_pref", "한국어")
@@ -174,7 +204,7 @@ def process_job(cfg, job: dict):
     transcripts = {}
     for i, vid in enumerate(video_ids):
         print(f"    [{i+1}/{total}] {vid} ...", end=" ", flush=True)
-        result = fetch_transcript(vid, lang_pref)
+        result = fetch_transcript(vid, lang_pref, http_client)
         transcripts[vid] = result
 
         if result["error"]:
@@ -219,6 +249,9 @@ def main():
         sys.exit(1)
 
     print("  ✅ Redis 연결 성공")
+
+    http_client = build_http_client()
+
     print("  📡 작업 대기 중...  (종료: Ctrl+C)\n")
 
     last_heartbeat = 0.0
@@ -237,7 +270,7 @@ def main():
             if raw:
                 try:
                     job = json.loads(raw)
-                    process_job(cfg, job)
+                    process_job(cfg, job, http_client)
                 except json.JSONDecodeError:
                     print(f"  [경고] 잘못된 작업 데이터: {raw[:80]}")
                 except Exception as e:

@@ -64,34 +64,13 @@ def _get_secret_proxy_list_text():
         pass
     return ""
 
-DEFAULT_UPSTASH_URL   = _get_secret("UPSTASH_URL", section="upstash")
-DEFAULT_UPSTASH_TOKEN = _get_secret("UPSTASH_TOKEN", section="upstash")
-DEFAULT_PROXY_LIST    = _get_secret_proxy_list_text()
-
-if "upstash_url" not in st.session_state:
-    st.session_state.upstash_url = ""
-if "upstash_token" not in st.session_state:
-    st.session_state.upstash_token = ""
-if "proxy_list_text" not in st.session_state:
-    st.session_state.proxy_list_text = ""
-if not st.session_state.get("_relay_cfg_loaded"):
-    saved_url   = cookie.get("yt_upstash_url")
-    saved_token = cookie.get("yt_upstash_token")
-    saved_proxy = cookie.get("yt_proxy_list")
-    if saved_url is not None:
-        st.session_state.upstash_url = saved_url
-        st.session_state.upstash_token = saved_token or ""
-        st.session_state.proxy_list_text = saved_proxy or ""
-        st.session_state._relay_cfg_loaded = True
-
-# 사이드바에서 직접 입력한 값이 있으면 그것을, 없으면 운영자 기본값(Secrets)을 사용
+# Secrets 값만 사용한다 (브라우저 쿠키로 덮어쓰는 경로는 없음 — 쿠키에 옛 값이
+# 남아 Secrets 최신값을 가려버리는 문제가 있어 제거했다).
 st.session_state.agent_cfg = {
-    "url":   st.session_state.upstash_url or DEFAULT_UPSTASH_URL,
-    "token": st.session_state.upstash_token or DEFAULT_UPSTASH_TOKEN,
+    "url":   _get_secret("UPSTASH_URL", section="upstash"),
+    "token": _get_secret("UPSTASH_TOKEN", section="upstash"),
 }
-st.session_state.effective_proxy_list_text = (
-    st.session_state.proxy_list_text or DEFAULT_PROXY_LIST
-)
+st.session_state.effective_proxy_list_text = _get_secret_proxy_list_text()
 
 # ─────────────────────────────────────────
 # 공유 사이드바 (모든 페이지 공통)
@@ -139,44 +118,6 @@ with st.sidebar:
             st.warning("🔴 에이전트 오프라인 — 서버가 프록시로 직접 수집합니다.")
     else:
         st.caption("에이전트 미설정 — 서버가 프록시로 직접 수집합니다.")
-
-    with st.expander("🔧 고급 설정 (선택 — 다른 에이전트/프록시 직접 지정)"):
-        st.caption(
-            "여기 입력하면 운영자 기본값 대신 이 값을 사용합니다. "
-            "보통은 비워둬도 됩니다."
-        )
-        upstash_url_input = st.text_input(
-            "Upstash REST URL",
-            value=st.session_state.upstash_url,
-            placeholder="https://xxxx.upstash.io",
-            key="upstash_url_input",
-        )
-        upstash_token_input = st.text_input(
-            "Upstash REST TOKEN",
-            value=st.session_state.upstash_token,
-            type="password",
-            key="upstash_token_input",
-        )
-        if st.button("💾 에이전트 설정 저장", use_container_width=True):
-            st.session_state.upstash_url = upstash_url_input.strip()
-            st.session_state.upstash_token = upstash_token_input.strip()
-            cookie.set("yt_upstash_url", st.session_state.upstash_url, max_age=365*24*3600)
-            cookie.set("yt_upstash_token", st.session_state.upstash_token, max_age=365*24*3600)
-            st.success("저장됐습니다.")
-
-        st.divider()
-        st.caption("프록시 목록 (에이전트 미연결 시 서버 직접수집용, 한 줄에 하나씩)")
-        proxy_input = st.text_area(
-            "프록시 (http://user:pass@ip:port)",
-            value=st.session_state.proxy_list_text,
-            height=80,
-            key="proxy_list_input",
-            label_visibility="collapsed",
-        )
-        if st.button("💾 프록시 목록 저장", use_container_width=True):
-            st.session_state.proxy_list_text = proxy_input.strip()
-            cookie.set("yt_proxy_list", st.session_state.proxy_list_text, max_age=365*24*3600)
-            st.success("저장됐습니다.")
 
     st.divider()
     st.caption("🎬 YouTube 영상 수집기 v1.0")

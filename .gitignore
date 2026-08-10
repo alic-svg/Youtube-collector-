@@ -5,3 +5,8 @@ __pycache__/
 venv/
 *.csv
 .streamlit/secrets.toml
+agent/cookies.json
+agent/config.json
+agent/dist/config.json
+agent/YT_Script_Agent_release/
+.claude/

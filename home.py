@@ -396,9 +396,41 @@ with tab3:
         "**출력 항목:** 채널명 · 구독자수 · 채널평균조회수 · 썸네일 · 제목 · 조회수 · 업로드일자 · URL · 스크립트 · 핵심키워드(태그)"
     )
     st.caption(
-        "🖥️ 사이드바에서 로컬 에이전트(Upstash)를 켜두면 그쪽 IP로 우선 수집하고, "
-        "꺼져 있으면 서버가 사이드바의 프록시 목록으로 직접 수집합니다."
+        "🖥️ 사이드바 '스크립트 수집 상태'가 🟢 온라인이면 로컬 에이전트로 우선 수집하고, "
+        "🔴 오프라인이면 서버가 프록시로 직접 수집합니다. (별도 설정 불필요)"
     )
+
+    with st.expander("📖 사용 방법 (자세히 보기)", expanded=False):
+        st.markdown("""
+**1. 영상 URL 입력**
+아래 입력창에 유튜브 영상 URL을 한 줄에 하나씩 붙여넣으세요.
+지원 형식: `watch?v=...`, `youtu.be/...`, `shorts/...`
+
+**2. 자막 언어 우선순위 선택**
+오른쪽 "자막 언어 우선순위"에서 선호 언어를 고르세요. 그 언어 자막이 없으면
+자동으로 다음 우선순위 언어로 전환해서 시도합니다. (예: 한국어 선택 시 → ko 없으면 en 시도)
+
+**3. "📝 스크립트 수집 시작" 클릭**
+- 먼저 YouTube Data API로 각 영상의 제목·조회수·채널정보를 가져옵니다.
+  (사이드바에 API 키를 저장해 두지 않으면 메타데이터 없이 스크립트만 수집됩니다)
+- 그 다음 자막을 수집합니다. 사이드바 상태가 🟢 온라인이면 운영자의 로컬 에이전트(집 PC IP)로
+  우선 처리하고, 실패하거나 🔴 오프라인이면 서버가 프록시를 돌려가며 직접 수집합니다.
+  이 전환은 자동으로 이뤄지므로 별도로 신경 쓸 필요는 없습니다.
+
+**4. 결과 확인**
+- 상단에 ✅ 성공 / ❌ 실패 개수가 표시됩니다.
+- 성공한 영상은 표(썸네일·채널명·구독자수·조회수·업로드일자·스크립트 미리보기·태그·수집 경로)로 나옵니다.
+- 각 영상 제목을 눌러 펼치면 스크립트 전문을 확인할 수 있습니다.
+- 실패한 영상은 "❌ 수집 실패" 펼침 목록에서 사유(자막 비활성화, 자막 없음 등)를 볼 수 있습니다.
+
+**5. CSV 다운로드**
+"⬇️ 스크립트 CSV 다운로드" 버튼으로 성공한 결과 전체를 CSV 파일로 저장할 수 있습니다.
+
+**참고**
+- 수동으로 등록된 자막이 있으면 그것을 우선 쓰고, 없으면 자동 생성 자막을 사용합니다.
+- 자막 자체가 없거나 비활성화된 영상은 수집이 불가능합니다.
+- 영상 수가 많을수록 시간이 오래 걸립니다 (영상 1개당 최소 수 초 소요).
+        """)
 
     col_left, col_right = st.columns([2, 1])
 
@@ -444,13 +476,10 @@ with tab3:
                 msg_text.text(message)
 
             proxy_list = [
-                p.strip() for p in st.session_state.get("proxy_list_text", "").splitlines()
+                p.strip() for p in st.session_state.get("effective_proxy_list_text", "").splitlines()
                 if p.strip()
             ]
-            agent_cfg = {
-                "url": st.session_state.get("upstash_url", ""),
-                "token": st.session_state.get("upstash_token", ""),
-            }
+            agent_cfg = st.session_state.get("agent_cfg", {})
 
             results, agent_online = collect_transcripts_hybrid(
                 urls=urls,

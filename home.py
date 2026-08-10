@@ -533,10 +533,10 @@ with tab3:
                 },
             )
 
-        for r in success:
+        for i, r in enumerate(success):
             vid_id = extract_video_id(r["URL"]) or r["URL"]
             with st.expander(f"📄 {r['제목']}", expanded=False):
-                st.text_area("전체 스크립트", value=r["스크립트"], height=250, key=f"sc_{vid_id}")
+                st.text_area("전체 스크립트", value=r["스크립트"], height=250, key=f"sc_{i}_{vid_id}")
 
         if failed:
             with st.expander(f"❌ 수집 실패 ({len(failed)}개)", expanded=False):

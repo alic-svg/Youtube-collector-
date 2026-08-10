@@ -41,15 +41,32 @@ if "result_label" not in st.session_state:
 # ── 로컬 에이전트(Upstash) / 프록시 설정 ──
 # 일반 사용자는 아무 것도 입력하지 않아도 되도록, 운영자가 Streamlit Secrets에
 # 저장해 둔 값을 기본값으로 쓴다. 사이드바에 직접 입력하면 그 값이 우선한다.
-def _get_secret(key, default=""):
+# secrets.toml에는 최상위(UPSTASH_URL = "...")나 섹션([upstash] UPSTASH_URL = "...")
+# 어느 쪽으로 적어도 되도록 둘 다 지원한다.
+def _get_secret(key, section=None, default=""):
     try:
-        return st.secrets.get(key, default)
+        if section and section in st.secrets and key in st.secrets[section]:
+            return st.secrets[section][key]
+        if key in st.secrets:
+            return st.secrets[key]
     except Exception:
-        return default
+        pass
+    return default
 
-DEFAULT_UPSTASH_URL   = _get_secret("UPSTASH_URL")
-DEFAULT_UPSTASH_TOKEN = _get_secret("UPSTASH_TOKEN")
-DEFAULT_PROXY_LIST    = _get_secret("PROXY_LIST")
+def _get_secret_proxy_list_text():
+    try:
+        if "proxies" in st.secrets and "list" in st.secrets["proxies"]:
+            return "\n".join(st.secrets["proxies"]["list"])
+        if "PROXY_LIST" in st.secrets:
+            val = st.secrets["PROXY_LIST"]
+            return val if isinstance(val, str) else "\n".join(val)
+    except Exception:
+        pass
+    return ""
+
+DEFAULT_UPSTASH_URL   = _get_secret("UPSTASH_URL", section="upstash")
+DEFAULT_UPSTASH_TOKEN = _get_secret("UPSTASH_TOKEN", section="upstash")
+DEFAULT_PROXY_LIST    = _get_secret_proxy_list_text()
 
 if "upstash_url" not in st.session_state:
     st.session_state.upstash_url = ""

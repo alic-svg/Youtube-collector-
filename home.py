@@ -11,7 +11,7 @@ import pandas as pd
 import streamlit as st
 
 from collector import collect_combined, get_autocomplete_bulk, QuotaExceededError, get_keyword_volumes
-from transcript import extract_video_id, get_video_metadata, get_channel_stats, build_thumbnail_formula, collect_transcripts
+from transcript import extract_video_id, get_video_metadata, get_channel_stats, build_thumbnail_formula, collect_transcripts_hybrid
 
 # ─────────────────────────────────────────
 # 유틸
@@ -395,6 +395,10 @@ with tab3:
         "자막이 비활성화된 영상은 수집 불가. "
         "**출력 항목:** 채널명 · 구독자수 · 채널평균조회수 · 썸네일 · 제목 · 조회수 · 업로드일자 · URL · 스크립트 · 핵심키워드(태그)"
     )
+    st.caption(
+        "🖥️ 사이드바에서 로컬 에이전트(Upstash)를 켜두면 그쪽 IP로 우선 수집하고, "
+        "꺼져 있으면 서버가 사이드바의 프록시 목록으로 직접 수집합니다."
+    )
 
     col_left, col_right = st.columns([2, 1])
 
@@ -439,13 +443,25 @@ with tab3:
                 prog.progress(min(progress, 1.0))
                 msg_text.text(message)
 
-            results = collect_transcripts(
+            proxy_list = [
+                p.strip() for p in st.session_state.get("proxy_list_text", "").splitlines()
+                if p.strip()
+            ]
+            agent_cfg = {
+                "url": st.session_state.get("upstash_url", ""),
+                "token": st.session_state.get("upstash_token", ""),
+            }
+
+            results, agent_online = collect_transcripts_hybrid(
                 urls=urls,
                 api_key=st.session_state.api_key,
                 lang_pref=script_lang,
+                proxy_list=proxy_list,
+                agent_cfg=agent_cfg,
                 callback=script_cb,
             )
             st.session_state.script_results = results
+            st.session_state.script_agent_used = agent_online
             prog.progress(1.0)
             msg_text.empty()
             st.rerun()
@@ -456,6 +472,9 @@ with tab3:
         success = [r for r in script_results if r["스크립트"]]
         failed  = [r for r in script_results if not r["스크립트"]]
         st.markdown(f"**✅ 성공 {len(success)}개 / ❌ 실패 {len(failed)}개**")
+        if st.session_state.get("script_agent_used"):
+            via_agent = sum(1 for r in script_results if r.get("_경로") == "에이전트")
+            st.caption(f"🖥️ 에이전트 경유 {via_agent}개 · 🌐 서버(직접/프록시) {len(script_results) - via_agent}개")
 
         if success:
             disp_df = pd.DataFrame([
@@ -470,6 +489,7 @@ with tab3:
                     "URL":              r["URL"],
                     "스크립트 미리보기": r["스크립트"][:80] + "…" if len(r["스크립트"]) > 80 else r["스크립트"],
                     "핵심키워드(태그)": r["핵심키워드(태그)"],
+                    "경로":             r.get("_경로", ""),
                 }
                 for r in success
             ])

@@ -13,6 +13,8 @@ import os
 import requests
 from pathlib import Path
 
+import agent_relay
+
 try:
     from youtube_transcript_api import YouTubeTranscriptApi
     _TRANSCRIPT_AVAILABLE = True
@@ -242,15 +244,37 @@ def get_transcript(video_id: str, lang_pref: str = "한국어",
 
 
 # ─────────────────────────────────────────
-# 통합 수집
+# 결과 행 조립
 # ─────────────────────────────────────────
-def collect_transcripts(urls: list, api_key: str, lang_pref: str = "한국어",
-                        proxy_list: list = None, callback=None):
-    """URL 목록 → 메타데이터 + 스크립트 수집. 쿠키는 agent/cookies.json에서 자동 로드."""
-    total = len(urls)
-    http_client = _build_http_client()
+def _build_row(url: str, vid, meta: dict, ch: dict, text: str, err: str):
+    if not vid:
+        return {
+            "채널명": "", "구독자수": 0, "채널평균조회수": 0,
+            "썸네일": "", "썸네일URL": "",
+            "제목": url, "조회수": 0, "업로드일자": "",
+            "URL": url, "스크립트": "", "핵심키워드(태그)": "",
+            "_오류": err or "유효하지 않은 URL",
+        }
+    tags     = meta.get("tags", [])
+    keywords = ", ".join(tags[:10]) if tags else ""
+    return {
+        "채널명":           meta.get("channel_name", ""),
+        "구독자수":         ch.get("subscribers", 0),
+        "채널평균조회수":   ch.get("avg_views", 0),
+        "썸네일":           build_thumbnail_formula(vid),
+        "썸네일URL":        f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
+        "제목":             meta.get("title", vid),
+        "조회수":           meta.get("views", 0),
+        "업로드일자":       meta.get("upload_date", ""),
+        "URL":              url,
+        "스크립트":         text or "",
+        "핵심키워드(태그)": keywords,
+        "_오류":            err or "",
+    }
 
-    # 1. 영상 ID 추출
+
+def _fetch_metadata(urls: list, api_key: str):
+    """URL 목록 → (url_id_map, metadata, ch_stats)"""
     url_id_map = {}
     for url in urls:
         vid = extract_video_id(url)
@@ -258,17 +282,25 @@ def collect_transcripts(urls: list, api_key: str, lang_pref: str = "한국어",
             url_id_map[url] = vid
 
     valid_ids = list(set(url_id_map.values()))
-
-    # 2. 메타데이터 조회
-    if callback:
-        callback(0.1, f"영상 정보 조회 중... ({len(valid_ids)}개)")
     metadata = get_video_metadata(valid_ids, api_key) if api_key else {}
-
-    # 3. 채널 통계
     channel_ids = list({m["channel_id"] for m in metadata.values() if "channel_id" in m})
     ch_stats = get_channel_stats(channel_ids, api_key) if api_key and channel_ids else {}
+    return url_id_map, metadata, ch_stats
 
-    # 4. 자막 수집
+
+# ─────────────────────────────────────────
+# 통합 수집 (직접 수집 — 서버 IP에서 바로 요청)
+# ─────────────────────────────────────────
+def collect_transcripts(urls: list, api_key: str, lang_pref: str = "한국어",
+                        proxy_list: list = None, callback=None):
+    """URL 목록 → 메타데이터 + 스크립트 수집. 쿠키는 agent/cookies.json에서 자동 로드."""
+    total = len(urls)
+    http_client = _build_http_client()
+
+    if callback:
+        callback(0.1, "영상 정보 조회 중...")
+    url_id_map, metadata, ch_stats = _fetch_metadata(urls, api_key)
+
     results = []
     for i, url in enumerate(urls):
         if callback:
@@ -276,42 +308,95 @@ def collect_transcripts(urls: list, api_key: str, lang_pref: str = "한국어",
 
         vid = url_id_map.get(url)
         if not vid:
-            results.append({
-                "채널명": "", "구독자수": 0, "채널평균조회수": 0,
-                "썸네일": "", "썸네일URL": "",
-                "제목": url, "조회수": 0, "업로드일자": "",
-                "URL": url, "스크립트": "", "핵심키워드(태그)": "",
-                "_오류": "유효하지 않은 URL",
-            })
+            results.append(_build_row(url, None, {}, {}, "", "유효하지 않은 URL"))
             continue
 
-        meta     = metadata.get(vid, {})
-        cid      = meta.get("channel_id", "")
-        ch       = ch_stats.get(cid, {"subscribers": 0, "avg_views": 0})
-        tags     = meta.get("tags", [])
-        keywords = ", ".join(tags[:10]) if tags else ""
+        meta = metadata.get(vid, {})
+        cid  = meta.get("channel_id", "")
+        ch   = ch_stats.get(cid, {"subscribers": 0, "avg_views": 0})
 
         text, lang, is_auto, err = get_transcript(
             vid, lang_pref, proxy_list=proxy_list, http_client=http_client
         )
 
         time.sleep(random.uniform(2.0, 5.0))
-
-        results.append({
-            "채널명":           meta.get("channel_name", ""),
-            "구독자수":         ch["subscribers"],
-            "채널평균조회수":   ch["avg_views"],
-            "썸네일":           build_thumbnail_formula(vid),
-            "썸네일URL":        f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg",
-            "제목":             meta.get("title", vid),
-            "조회수":           meta.get("views", 0),
-            "업로드일자":       meta.get("upload_date", ""),
-            "URL":              url,
-            "스크립트":         text or "",
-            "핵심키워드(태그)": keywords,
-            "_오류":            err or "",
-        })
+        results.append(_build_row(url, vid, meta, ch, text, err))
 
     if callback:
         callback(1.0, "완료")
     return results
+
+
+# ─────────────────────────────────────────
+# 통합 수집 (하이브리드 — 로컬 에이전트 우선, 미연결/실패 시 프록시로 폴백)
+# ─────────────────────────────────────────
+def collect_transcripts_hybrid(urls: list, api_key: str, lang_pref: str = "한국어",
+                               proxy_list: list = None, agent_cfg: dict = None,
+                               callback=None):
+    """
+    영상마다:
+      1) 로컬 에이전트가 온라인이면 Upstash 큐로 작업을 넘겨 처리 (집 IP → 차단 회피)
+      2) 에이전트가 오프라인이거나 응답이 없으면 서버에서 프록시 로테이션으로 직접 수집
+    반환: (results, agent_online)
+    """
+    total = len(urls)
+    http_client = _build_http_client()
+
+    if callback:
+        callback(0.05, "영상 정보 조회 중...")
+    url_id_map, metadata, ch_stats = _fetch_metadata(urls, api_key)
+
+    agent_online = agent_relay.is_configured(agent_cfg) and agent_relay.is_agent_online(agent_cfg)
+    if callback:
+        callback(
+            0.1,
+            "🖥️ 로컬 에이전트 연결됨 — 에이전트로 수집합니다."
+            if agent_online else
+            "⚠️ 로컬 에이전트 미연결 — 서버에서 프록시로 직접 수집합니다."
+        )
+
+    results = []
+    for i, url in enumerate(urls):
+        if callback:
+            callback(0.15 + i / total * 0.85, f"자막 수집 중... ({i+1}/{total})")
+
+        vid = url_id_map.get(url)
+        if not vid:
+            results.append(_build_row(url, None, {}, {}, "", "유효하지 않은 URL"))
+            continue
+
+        meta = metadata.get(vid, {})
+        cid  = meta.get("channel_id", "")
+        ch   = ch_stats.get(cid, {"subscribers": 0, "avg_views": 0})
+
+        text, err, via_agent = None, None, False
+
+        if agent_online:
+            job_id = agent_relay.submit_video_job(agent_cfg, vid, lang_pref)
+            r = agent_relay.poll_video_result(agent_cfg, job_id, vid)
+            if r and r.get("text"):
+                text, via_agent = r["text"], True
+            elif r and r.get("error"):
+                err = r["error"]
+            else:
+                err = "에이전트 응답 없음(타임아웃)"
+
+        if text is None:
+            t2, _, _, e2 = get_transcript(
+                vid, lang_pref, proxy_list=proxy_list, http_client=http_client
+            )
+            if t2:
+                text, err = t2, None
+            else:
+                err = e2 or err
+            time.sleep(random.uniform(2.0, 5.0))
+        else:
+            time.sleep(random.uniform(0.3, 1.0))
+
+        row = _build_row(url, vid, meta, ch, text, err)
+        row["_경로"] = "에이전트" if via_agent else "서버(직접/프록시)"
+        results.append(row)
+
+    if callback:
+        callback(1.0, "완료")
+    return results, agent_online

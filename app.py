@@ -5,6 +5,7 @@ YouTube 영상 수집기 - 네비게이션 진입점
 import streamlit as st
 from streamlit_cookies_controller import CookieController
 from collector import validate_api_key
+import agent_relay
 
 st.set_page_config(
     page_title="YouTube 영상 수집기",
@@ -37,6 +38,23 @@ if "results" not in st.session_state:
 if "result_label" not in st.session_state:
     st.session_state.result_label = ""
 
+# ── 로컬 에이전트(Upstash) / 프록시 설정 ──
+if "upstash_url" not in st.session_state:
+    st.session_state.upstash_url = ""
+if "upstash_token" not in st.session_state:
+    st.session_state.upstash_token = ""
+if "proxy_list_text" not in st.session_state:
+    st.session_state.proxy_list_text = ""
+if not st.session_state.get("_relay_cfg_loaded"):
+    saved_url   = cookie.get("yt_upstash_url")
+    saved_token = cookie.get("yt_upstash_token")
+    saved_proxy = cookie.get("yt_proxy_list")
+    if saved_url is not None:
+        st.session_state.upstash_url = saved_url
+        st.session_state.upstash_token = saved_token or ""
+        st.session_state.proxy_list_text = saved_proxy or ""
+        st.session_state._relay_cfg_loaded = True
+
 # ─────────────────────────────────────────
 # 공유 사이드바 (모든 페이지 공통)
 # ─────────────────────────────────────────
@@ -66,6 +84,59 @@ with st.sidebar:
                 st.success(msg) if ok else st.error(msg)
             else:
                 st.warning("API 키를 먼저 입력하세요.")
+
+    st.divider()
+
+    # ── 로컬 에이전트 연동 (Upstash Redis) ──
+    st.title("🖥️ 로컬 에이전트")
+    st.caption(
+        "클라우드 서버 IP는 YouTube에 쉽게 차단됩니다. "
+        "집 PC에서 [agent] 실행파일을 켜두면 자막 수집을 그쪽으로 넘겨 차단을 피합니다."
+    )
+    upstash_url_input = st.text_input(
+        "Upstash REST URL",
+        value=st.session_state.upstash_url,
+        placeholder="https://xxxx.upstash.io",
+        key="upstash_url_input",
+    )
+    upstash_token_input = st.text_input(
+        "Upstash REST TOKEN",
+        value=st.session_state.upstash_token,
+        type="password",
+        key="upstash_token_input",
+    )
+    if st.button("💾 에이전트 설정 저장", use_container_width=True):
+        st.session_state.upstash_url = upstash_url_input.strip()
+        st.session_state.upstash_token = upstash_token_input.strip()
+        cookie.set("yt_upstash_url", st.session_state.upstash_url, max_age=365*24*3600)
+        cookie.set("yt_upstash_token", st.session_state.upstash_token, max_age=365*24*3600)
+        st.success("저장됐습니다.")
+
+    agent_cfg = {"url": st.session_state.upstash_url, "token": st.session_state.upstash_token}
+    if agent_relay.is_configured(agent_cfg):
+        if agent_relay.is_agent_online(agent_cfg):
+            st.success("🟢 에이전트 온라인")
+        else:
+            st.warning("🔴 에이전트 오프라인 — 집 PC에서 실행파일을 켜주세요.")
+    else:
+        st.caption("에이전트 설정 전 — 서버 직접수집(프록시)으로 동작합니다.")
+
+    st.divider()
+
+    # ── 프록시 목록 (에이전트 미연결 시 폴백용) ──
+    st.title("🌐 프록시 목록")
+    st.caption("에이전트가 꺼져 있을 때 서버가 직접 수집하며 사용할 프록시. 한 줄에 하나씩.")
+    proxy_input = st.text_area(
+        "프록시 (http://user:pass@ip:port)",
+        value=st.session_state.proxy_list_text,
+        height=80,
+        key="proxy_list_input",
+        label_visibility="collapsed",
+    )
+    if st.button("💾 프록시 목록 저장", use_container_width=True):
+        st.session_state.proxy_list_text = proxy_input.strip()
+        cookie.set("yt_proxy_list", st.session_state.proxy_list_text, max_age=365*24*3600)
+        st.success("저장됐습니다.")
 
     st.divider()
     st.caption("🎬 YouTube 영상 수집기 v1.0")
